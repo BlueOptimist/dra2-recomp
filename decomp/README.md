@@ -282,7 +282,14 @@ All of them are `__stdcall`, except `XPhysicalFree`, which the game's prototype 
   - Rumble: the game writes the motor speeds at `+0x42`/`+0x44` of `XINPUT_FEEDBACK` (checked at its call site).
 - **Settings:** English, NTSC, 4:3. `XLaunchNewImageA` (back to the dashboard) quits.
 
-**Not covered yet: kernel imports.** The Xbox kernel thunk table at the start of `.rdata` still holds raw kernel ordinals. Any game code that calls the kernel directly, rather than through XAPI, will need those entries pointed at Windows implementations.
+### Xbox kernel imports
+
+The XBE imports **158 kernel functions** through the thunk table at the start of `.rdata` (`0x292980`, one `0x80000000 | ordinal` word each). Ghidra's loader labels every entry with its kernel name.
+- **The game never calls the kernel itself.** There's no reference to any import name, no `PTR_` label or raw address in the table from `src/` (game + engine core), and no pointer into the table from data.
+- 90 imports are used only inside the Xbox libraries (CRT, XAPI, D3D8, DSOUND), which the port replaces.
+- 68 aren't referenced at all.
+
+So no kernel function needs a Windows implementation. To fail loudly rather than jump to a raw ordinal, `gen_data.py` points every table entry at a generated stub. The stub calls `port_kernel_unimplemented("<name>")` (in `platform.c`), which prints the import and aborts.
 
 ### Suggested order
 

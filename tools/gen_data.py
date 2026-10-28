@@ -34,7 +34,8 @@ WINDOWS_CRT = set("""qsort memmove memcpy memset memcmp sprintf strcspn strncmp 
 strcmp strcpy strcat rand srand isdigit isspace isalpha toupper tolower atol atoi atof atexit _stricmp _strnicmp
 _vsnprintf vsprintf _copysign _controlfp ceil floor fread fwrite fopen fclose fseek ftell free malloc realloc calloc
 log2 log log10 exp exp2 pow sqrt sin cos tan atan atan2 asin acos fabs fmod ldexp rint _allrem _allmul _alldiv
-_aulldiv _aullrem _allshl _allshr _aullshr _chkstk _alloca_probe _fltused _ftol _ftol2 _ftol2_sse""".split())
+_aulldiv _aullrem _allshl _allshr _aullshr _chkstk _alloca_probe _fltused _ftol _ftol2 _ftol2_sse printf abort
+exit""".split())
 
 
 def xbe_sections(path):
@@ -136,6 +137,21 @@ def main():
         else:
             not_here[re.sub(r"_[0-9a-f]{8}$|^_+", "", c).split("_")[0] or c] += 1
 
+    # The Xbox kernel import table at the start of .rdata: one word per import (0x80000000 | ordinal), ending with 0.
+    # Each entry gets a stub that reports the import by name and stops (port_kernel_unimplemented); the game never
+    # calls the kernel itself, only the Xbox libraries the port replaces do.
+    kernel_table = {}
+    rdata_va, _, rdata_raw = secs[".rdata"]
+    names_at = {}
+    for r in csv.DictReader(open(os.path.join(analysis, "data_symbols.tsv")), delimiter="\t"):
+        if r["kind"] == "label" and "." not in r["name"]:
+            names_at.setdefault(int(r["address"], 16), r["name"])
+    for k in range(0, 1024):
+        w, = struct.unpack_from("<I", rdata_raw, 4 * k)
+        if not w & 0x80000000:
+            break
+        kernel_table[rdata_va + 4 * k] = names_at.get(rdata_va + 4 * k, f"ordinal_{w & 0xffff}")
+
     # pointers stored in the sections
     pointers = {}
     for r in csv.DictReader(open(os.path.join(analysis, "data_refs.tsv")), delimiter="\t"):
@@ -184,6 +200,12 @@ def main():
                 asm.append(f"\t.zero {nxt - off}")
                 off = nxt
                 continue
+            if va + off in kernel_table and not any(off + k in label_set for k in (1, 2, 3)):
+                flush()
+                asm.append(f"\t.long Lkernel_{kernel_table[va + off]}")
+                stats["kernel imports routed to reporting stubs"] += 1
+                off += 4
+                continue
             ptr = pointers.get(va + off)
             if ptr is not None and off + 4 <= len(raw) and not any(off + k in label_set for k in (1, 2, 3)) \
                     and struct.unpack_from("<I", raw, off)[0] == ptr:
@@ -216,6 +238,10 @@ def main():
             asm += [f"\t.globl {raw}", f"{raw}:", f"\tjmp {raw_by_cname[c[len('thunk_'):]]}"]
             stats["thunks"] += 1
 
+    for name in kernel_table.values():
+        asm += [f"Lkernel_{name}:", f"\tpushl $Lkname_{name}", "\tcalll _port_kernel_unimplemented",
+                f"Lkname_{name}:", f'\t.asciz "{name}"']
+
     s_path = os.path.join(out_dir, "xbe_data.s")
     with open(s_path, "w", encoding="latin-1") as f:
         f.write("\n".join(asm) + "\n")
@@ -230,7 +256,9 @@ def main():
     kinds = collections.Counter()
     for raw in still:
         c = undecorate(raw)
-        if c in WINDOWS_CRT:
+        if raw.startswith("__imp_"):
+            kinds["Windows API import (kernel32 etc., provided by import libraries at link time)"] += 1
+        elif c in WINDOWS_CRT:
             kinds["C runtime (provided by the Windows CRT at link time)"] += 1
         elif re.match(r"(?:thunk_)?(?:FUN|LAB)_", c):
             kinds["code (FUN_/LAB_ not compiled)"] += 1
