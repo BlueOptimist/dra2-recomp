@@ -126,6 +126,22 @@ def main():
         jobs_list.append((clang, src, os.path.join(obj_dir, "port_" + os.path.basename(src)[:-2] + ".obj"),
                           [build, decomp]))
 
+    # Lua 5.0.3 (third_party/), built with float numbers like the game's copy: its own flags, no decompiler ones
+    lua = os.path.join(decomp, "..", "third_party", "lua-5.0.3")
+    lua_flags = [f"--target={TARGET}", "-c", "-O2", "-w", "-DLUA_NUMBER=float", '-DLUA_NUMBER_SCAN="%f"',
+                 '-DLUA_NUMBER_FMT="%.7g"', "-I" + os.path.join(lua, "include"), "-I" + os.path.join(lua, "src")]
+    lua_failed = []
+    lua_sources = [s for s in sorted(glob.glob(os.path.join(lua, "src", "*.c"))) if not s.endswith("ltests.c")]
+    lua_sources += sorted(glob.glob(os.path.join(lua, "src", "lib", "*.c")))
+    for src in lua_sources:
+        obj = os.path.join(obj_dir, "lua_" + os.path.basename(src)[:-2] + ".obj")
+        proc = subprocess.run([clang, *lua_flags, src, "-o", obj], capture_output=True, text=True, encoding="latin-1")
+        if proc.returncode:
+            lua_failed.append((src, proc.stderr.strip().splitlines()[0] if proc.stderr.strip() else "?"))
+    print(f"Lua 5.0.3: {len(lua_sources) - len(lua_failed)} of {len(lua_sources)} files compiled (LUA_NUMBER float)")
+    for src, err in lua_failed:
+        print(f"  FAILED {os.path.basename(src)}: {err}")
+
     failed = []
     with concurrent.futures.ThreadPoolExecutor(jobs) as pool:
         for src, rc, err in pool.map(compile_obj, jobs_list):

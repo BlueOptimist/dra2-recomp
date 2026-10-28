@@ -42,7 +42,24 @@ jobs:
           llvm-lib /out:out/dra2_port.lib $objs
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
+      - name: Build Lua 5.0.3 as the game uses it (LUA_NUMBER float)
+        shell: pwsh
+        run: |
+          $env:PATH = "C:\Program Files\LLVM\bin;$env:PATH"
+          $lua = "third_party/lua-5.0.3"
+          $srcs = (Get-ChildItem "$lua/src" -Filter *.c | Where-Object Name -ne 'ltests.c') + (Get-ChildItem "$lua/src/lib" -Filter *.c)
+          $objs = foreach ($src in $srcs) {
+            $obj = "out/lua_$($src.BaseName).obj"
+            clang -c --target=i686-pc-windows-msvc -O2 -w -DLUA_NUMBER=float '-DLUA_NUMBER_SCAN="%f"' '-DLUA_NUMBER_FMT="%.7g"' -I "$lua/include" -I "$lua/src" $src.FullName -o $obj
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            $obj
+          }
+          llvm-lib /out:out/lua50_float.lib $objs
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
       - uses: actions/upload-artifact@v4
         with:
           name: dra2_port-win32
-          path: out/dra2_port.lib
+          path: |
+            out/dra2_port.lib
+            out/lua50_float.lib

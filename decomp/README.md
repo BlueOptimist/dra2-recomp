@@ -257,7 +257,14 @@ The port's `main` does the part the Windows CRT doesn't:
 - **Run:** the big one, `0x2bf870–0x2c2fd0`, holds the C++ static constructors and registration functions. Its 3,534 game entries point at recompiled code through the generated `.data`; the 9 that point into XDK library code are skipped.
 - Then it calls `game_main(0, 0, 0)`.
 
-**First link: 281 undefined symbols.** The Windows CRT, the compiler's own runtime helpers and all Win32 imports resolve. What's left:
+**Lua.** `third_party/lua-5.0.3` is the stock Lua 5.0.3 (MIT licence; `src/`, `include/`, `COPYRIGHT` and `README` only). It's the last bug-fix release of 5.0, with the same API as the game's copy. The SHA-256 of `lua-5.0.3.tar.gz` matched the one listed on lua.org.
+`build_objects.py` compiles it (27 files, without `ltests.c`) with the game's number type: `-DLUA_NUMBER=float -DLUA_NUMBER_SCAN="%f" -DLUA_NUMBER_FMT="%.7g"`. That resolves all 45 Lua symbols, with no clashes. CI builds the same configuration as `lua50_float.lib`.
+
+**Link status: 236 undefined symbols.**
+- **First link: 281.** The CRT, compiler helpers and Win32 imports resolved.
+- **Lua 5.0.3 then removed 45.**
+
+The table below is the first link's breakdown; the Lua row is now done. The Windows CRT, the compiler's own runtime helpers and all Win32 imports resolve. What's left:
 
 | missing | count | next step |
 |---|---|---|
