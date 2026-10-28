@@ -246,7 +246,8 @@ def main():
     with open(s_path, "w", encoding="latin-1") as f:
         f.write("\n".join(asm) + "\n")
     obj = os.path.join(build, "obj", "xbe_data.obj")
-    proc = subprocess.run([clang, "--target=i686-pc-windows-msvc", "-c", s_path, "-o", obj],
+    target = next((a.split("=", 1)[1] for a in sys.argv[5:] if a.startswith("--target=")), "i686-pc-windows-msvc")
+    proc = subprocess.run([clang, f"--target={target}", "-c", s_path, "-o", obj],
                           capture_output=True, text=True, encoding="latin-1")
     if proc.returncode:
         raise SystemExit("assembling failed:\n" + proc.stderr[:3000])

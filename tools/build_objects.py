@@ -1,6 +1,9 @@
 """Compile the preprocessed decompiled code to real objects and report what a link would still need.
 
-Usage: python build_objects.py <decomp_dir> <llvm_bin_dir> [--jobs=N]
+Usage: python build_objects.py <decomp_dir> <llvm_bin_dir> [--jobs=N] [--target=i686-w64-mingw32]
+
+The default target is i686-pc-windows-msvc (Microsoft's CRT and SDK libraries). With llvm-mingw's bin folder and
+--target=i686-w64-mingw32, the objects are built for MinGW-w64 instead, which links without Visual Studio.
 
 Run tools/compile_check.py first: it writes build/pp/ (the compilable form of src/) and build/compile_report.tsv.
   1. copies build/pp/ to build/obj_src/, replacing the body of every function that still has compile errors with a
@@ -54,9 +57,13 @@ def stub_functions(text, broken):
     return "\n".join(out), stubbed
 
 
+TARGET = "i686-pc-windows-msvc"
+
+
 def compile_obj(args):
     clang, src, obj, includes = args
-    proc = subprocess.run([clang, *OBJ_FLAGS, *[f"-I{i}" for i in includes], src, "-o", obj],
+    flags = [f"--target={TARGET}" if f.startswith("--target=") else f for f in OBJ_FLAGS]
+    proc = subprocess.run([clang, *flags, *[f"-I{i}" for i in includes], src, "-o", obj],
                           capture_output=True, text=True, encoding="latin-1")
     return src, proc.returncode, proc.stderr
 
@@ -80,8 +87,10 @@ def nm(llvm_nm, obj):
 
 
 def main():
+    global TARGET
     decomp, llvm_bin = sys.argv[1], sys.argv[2]
     jobs = next((int(a.split("=")[1]) for a in sys.argv[3:] if a.startswith("--jobs=")), os.cpu_count())
+    TARGET = next((a.split("=", 1)[1] for a in sys.argv[3:] if a.startswith("--target=")), TARGET)
     clang = os.path.join(llvm_bin, "clang.exe")
     llvm_nm = os.path.join(llvm_bin, "llvm-nm.exe")
     build = os.path.join(decomp, "build")

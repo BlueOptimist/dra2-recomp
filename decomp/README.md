@@ -233,6 +233,40 @@ Building the data exposed **3,833 functions Ghidra had never defined**. They are
 | bare method names (`vf01`, `ctor`, `SetModel`, …) | 13 | Ghidra printed a method reference without its class; fix per use. |
 | `___CxxFrameHandler` | 1 | A leftover reference to the exception handler; remove with the SEH frames. |
 
+## Linking an .exe (llvm-mingw, no Visual Studio)
+
+The link uses **llvm-mingw** (`C:\Users\Veo\Tools\llvm-mingw-20261006-ucrt-x86_64`): a portable, open-source clang + lld toolchain with the MinGW-w64 headers, import libraries and C runtime (UCRT). It needs no install and no admin rights. Its SHA-256 was checked against the release metadata.
+
+```
+python -I tools/compile_check.py decomp <llvm>\bin\clang.exe                         # syntax check (MSVC target), writes build/pp
+python -I tools/build_objects.py decomp <llvm-mingw>\bin --target=i686-w64-mingw32   # objects
+python -I tools/gen_platform_stubs.py decomp <llvm-mingw>\bin                         # weak Xbox stubs (then compile port/xbox_stubs.c)
+python -I tools/gen_data.py extracted/default.xbe decomp analysis <llvm-mingw>\bin --target=i686-w64-mingw32
+python -I tools/link_exe.py decomp <llvm-mingw>\bin                                   # -> build/dra2.exe, or build/link_errors.txt
+```
+
+The image is linked at `0x400000` without ASLR, so a pointer the data generator couldn't relocate (an Xbox address, `0x10000–0x340000`) can never be mistaken for one of ours.
+
+**Entry point (`port/startup.c`).** On the Xbox, the XBE entry (`0x127020`) starts a thread at `0x126fac`. That thread:
+1. initialises XAPI and the CRT;
+2. runs three `_initterm` tables;
+3. calls the game's `main(0, 0, 0)` at `0x0a2250`, now named `game_main` and made cdecl with three parameters. It was committed as `__stdcall` with two.
+
+The port's `main` does the part the Windows CRT doesn't:
+- **Skipped:** the first two tables (`0x2bf860`, `0x2c2fd4`) are the Xbox CRT's own initializers.
+- **Run:** the big one, `0x2bf870–0x2c2fd0`, holds the C++ static constructors and registration functions. Its 3,534 game entries point at recompiled code through the generated `.data`; the 9 that point into XDK library code are skipped.
+- Then it calls `game_main(0, 0, 0)`.
+
+**First link: 281 undefined symbols.** The Windows CRT, the compiler's own runtime helpers and all Win32 imports resolve. What's left:
+
+| missing | count | next step |
+|---|---|---|
+| decompiler pseudo-variables (`_param_N`, `_local_N`, `iRam…`, `stack0x…`) | 193 | Fix per function in Ghidra (split variables, null-pointer offsets) |
+| Lua 5.0 | 45 | Build the Lua 5.0 source with `LUA_NUMBER` `float` |
+| data labels in the XDK sections | 20 | Platform layer (D3D/DSOUND state) |
+| bare method names (`vf01`, `ctor`, `SetModel`, …), `XBE_FILE_HEADER`, `___CxxFrameHandler` | 16 | Fix the references in Ghidra |
+| static-init code labels | 7 | Define them as functions |
+
 ## Platform layer (`port/`)
 
 The Windows replacement for the Xbox system libraries lives in `decomp/port/`. `build_objects.py` compiles every `.c` file there.

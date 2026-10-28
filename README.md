@@ -221,7 +221,9 @@ analyzeHeadless.bat C:\Users\Veo\DOWNLO~1\DIGIMO~2\ghidra DigimonRumbleArena2 -p
 
 - Git for Windows 2.56.0.2, portable (`PortableGit`), SHA-256 and signature verified. No admin rights needed.
 
-## Tools still needed (not installed)
+- llvm-mingw 20261006 (UCRT, x86_64 host), portable. Its SHA-256 was checked against the release metadata. It links the `.exe` without Visual Studio: clang, lld and the MinGW-w64 headers, import libraries and C runtime.
 
-- Visual Studio 2022 Build Tools (C++) + Windows SDK, needed to link an `.exe` locally. One install attempt was cancelled at the admin prompt. CMake.
+## Tools not needed after all
+
+- Visual Studio Build Tools: llvm-mingw covers linking. One install attempt was cancelled at the admin prompt, and that's fine.
 - Optional: MSVC 7.1 toolchain and objdiff, needed only for a matching decomp
