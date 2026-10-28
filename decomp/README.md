@@ -241,6 +241,8 @@ The Windows replacement for the Xbox system libraries lives in `decomp/port/`. `
 |---|---|
 | `platform.c` | Shared core. Right now: `port_todo(name)`, which logs each not-yet-implemented Xbox call once per run. |
 | `cxx_runtime.c` | MSVC C++ runtime helpers the game calls directly (array construct/destruct loops, `exception::~exception`). |
+| `xapi.c` | **XAPI on Win32: done.** All 39 XAPI functions the game calls, plus 7 unnamed ones identified from their call sites: `GetProcessHeap` (`0x1294c8`), `RtlAllocateHeap` (`0x12ae24`), `CreateFileA` (`0x12d671`), `CopyFileA` (`0x12dade`), `GetFileAttributesA` (`0x12f09a`), `DeleteFileA` (`0x12f1fd`), `GetDiskFreeSpaceExA` (`0x125782`). Details below. |
+| `win32_min.h` | The Win32 declarations the port uses, written out, so it builds without the Windows SDK headers. |
 | `xbox_stubs.c` | **Generated** by `tools/gen_platform_stubs.py`; don't edit. A weak stand-in for every Xbox symbol the game uses, built from its exact prototype in `build/program.h`. It holds 119 functions and 17 data symbols. |
 
 Because every stub is weak, **implementing a function means writing it, with the same name and prototype, in a new file in `port/`**. The real definition replaces the stub at link time, so the layer can be filled in one function at a time, and every run logs which stubs it actually hit.
@@ -261,6 +263,26 @@ With the stubs in place no Xbox system symbol is missing. **339 symbols remain u
 | **DirectSound, Xbox** (`DSOUND__`) | 28 | Sound and music buffers, play/stop, volume, frequency, 3D position, HRTF, mix bins, envelopes (`SetEG`), DSP effects image. | XAudio2. Xbox ADPCM buffers are decoded to PCM (`wave_to_wav.py` already has the decoder). Mix bins become submix voices; HRTF and the DSP image can start as no-ops. |
 | **XGraphics** (`XGRAPHC__`, `XGRAPHICS__`) | 5 | Filling resource headers and swizzling texture rectangles. | Small helpers: the header layout is known, and swizzling is a bit-interleave. |
 | unnamed XDK-section functions | 9 | Internal XDK helpers the game calls directly. | Identify each, then implement or no-op. |
+
+### XAPI (`port/xapi.c`)
+
+Every implementation keeps the name, calling convention and parameter count of the prototype the game is compiled against, so its decorated name matches the stub exactly. That was checked for all 48 symbols.
+All of them are `__stdcall`, except `XPhysicalFree`, which the game's prototype declares cdecl.
+
+- **Kernel objects, threads, timing:** passed straight to Win32 (`CreateThread`, events, mutexes, waits, `Sleep`, `QueryPerformanceCounter`, `GetLastError`).
+- **Memory:** `GlobalMemoryStatus` has the same layout on both. The heap goes to the Windows process heap. `XPhysicalAlloc`/`Free` become `VirtualAlloc`/`VirtualFree`.
+- **Files and paths:** the game uses Xbox drive letters.
+  - `d:\` (the disc) maps to `%DRA2_DATA%`, or `<exe folder>\data` if that isn't set.
+  - `u:\` (saves) and the `t:\`/`z:\` scratch drives map to `%DRA2_SAVES%\u|t|z`, or `<exe folder>\saves\…`.
+- **Save games:** each save is a folder under `u:\`, named by a 48-bit hash of its display name. The display name is kept in `savename.bin` so `XFindFirstSaveGame`/`XFindNextSaveGame` can list it. `XCreateSaveGame` honours `CREATE_NEW`/`OPEN_EXISTING`/`OPEN_ALWAYS`; `XDeleteSaveGame` removes the folder.
+- **Save signatures:** the Xbox signs saves with a per-console key. Here a stable 20-byte digest is enough, because the PC build only checks its own saves.
+- **Gamepads:** Windows XInput (`xinput1_4.dll`, falling back to `xinput9_1_0.dll`), loaded at run time.
+  - Button mapping: the Xbox analog face buttons A/B/X/Y become 0 or 255; Black comes from the right shoulder, White from the left; triggers and sticks map directly; the d-pad, Start, Back and stick-click bits are identical.
+  - `XGetDevices`/`XGetDeviceChanges` report connected pads. No memory units are reported, so saves go to `u:\`.
+  - Rumble: the game writes the motor speeds at `+0x42`/`+0x44` of `XINPUT_FEEDBACK` (checked at its call site).
+- **Settings:** English, NTSC, 4:3. `XLaunchNewImageA` (back to the dashboard) quits.
+
+**Not covered yet: kernel imports.** The Xbox kernel thunk table at the start of `.rdata` still holds raw kernel ordinals. Any game code that calls the kernel directly, rather than through XAPI, will need those entries pointed at Windows implementations.
 
 ### Suggested order
 

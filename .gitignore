@@ -22,6 +22,8 @@
 /decomp/port/*
 !/decomp/port/platform.c
 !/decomp/port/cxx_runtime.c
+!/decomp/port/xapi.c
+!/decomp/port/win32_min.h
 
 !/analysis/
 /analysis/*
