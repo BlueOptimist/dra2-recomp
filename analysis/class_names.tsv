@@ -1,0 +1,115 @@
+class	name	evidence
+Class_296b68	DebugMenuItem	vtable written by DebugMenuItem_ctor (0x14e4f0); one per debug menu entry, object size 0x94
+Class_296bf0	DebugMenuTeleportPlayer	DebugMenuItem subclass: "Teleport player...", "No PlayerLocation nodes in level"
+Class_296c50	DebugMenuOptions	DebugMenuItem subclass: "Debug options..."
+Class_296ca4	DebugMenuHousekeeping	DebugMenuItem subclass: "Format Memory Card 1", "Random Housekeeping Tools..."
+Class_2a3ebc	DebugResourcePoolView	DebugMenuItem subclass: "Nothing loaded", "Pool @ %x", "Pinned files", "Moveable files"
+Class_2a3f40	DebugMenuMemoryUsage	DebugMenuItem subclass: "Memory usage info..."
+Class_2a412c	DebugMenuDynamicNodeGraph	DebugMenuItem subclass: "Dynamic NodeGraph debug..."
+Class_2a438c	DebugMenuCharacterPreview	DebugMenuItem subclass: "Character preview...", animlist.res
+Class_2a44cc	DebugMenuChangeLevel	DebugMenuItem subclass: "Change level...", levellist.res
+Class_2a7d00	DebugMenuTransform	DebugMenuItem subclass: "Transform..."
+Class_296b88	DebugPage	base of debug pages ("No title")
+Class_296d08	DebugPageLevelNodeGraph	DebugPage subclass: "Level NodeGraph debug..."
+Class_2a41e0	DebugPageNodeInspector	DebugPage subclass: "Node type: %s", "Node index: %d"
+Class_2989f0	SystemMessage	base of the platform error/confirmation dialogs (ERROR_XBOX_*, RESULT_*)
+Class_298a10	SysMsgLoading	SystemMessage: ERROR_XBOX_LOADING
+Class_298c10	SysMsgLoadFailed	SystemMessage: ERROR_XBOX_LOAD_FAILED
+Class_298cd8	SysMsgReconnectController0	SystemMessage: ERROR_XBOX_RECONNECT_CONTROLLER0
+Class_298d1c	SysMsgReconnectController1	SystemMessage: ERROR_XBOX_RECONNECT_CONTROLLER1
+Class_298d60	SysMsgReconnectController2	SystemMessage: ERROR_XBOX_RECONNECT_CONTROLLER2
+Class_298da4	SysMsgReconnectController3	SystemMessage: ERROR_XBOX_RECONNECT_CONTROLLER3
+Class_298de8	SysMsgReconnectNoContinue0	SystemMessage: ERROR_XBOX_RECONNECT_NOCONTINUE0
+Class_298e2c	SysMsgReconnectNoContinue1	SystemMessage: ERROR_XBOX_RECONNECT_NOCONTINUE1
+Class_298e70	SysMsgReconnectNoContinue2	SystemMessage: ERROR_XBOX_RECONNECT_NOCONTINUE2
+Class_298eb4	SysMsgReconnectNoContinue3	SystemMessage: ERROR_XBOX_RECONNECT_NOCONTINUE3
+Class_298f10	SysMsgDriveFull	SystemMessage: ERROR_XBOX_DRIVE_FULL
+Class_298f30	SysMsgBadDisc	SystemMessage: ERROR_XBOX_BAD_DISC
+Class_298f64	SysMsgSaving	SystemMessage: ERROR_XBOX_SAVING
+Class_298fd8	SysMsgNgcDiscNotPresent	SystemMessage: ERROR_NGC_DISC_NOT_PRESENT (GameCube leftover)
+Class_298a8c	SysMsgYesNo	SystemMessage: RESULT_YES / RESULT_NO
+Class_298aac	SysMsgNoYes	SystemMessage: RESULT_NO / RESULT_YES (default No)
+Class_298afc	SysMsgRetryOrContinueWithoutSave	SystemMessage: RESULT_RETRY / RESULT_CONTINUE_WITHOUT_SAVE
+Class_298b3c	SysMsgRetryOrContinueWithoutLoading	SystemMessage: RESULT_RETRY / RESULT_CONTINUE_WITHOUT_LOADING
+Class_298f98	SysMsgLoadSoundSettings	SysMsgYesNo subclass: ERROR_XBOX_LOADSOUNDSETTINGS
+Class_299978	Screen	base of MenuScreen and the arena level; loads per-screen .res files
+Class_29f378	MenuScreen	loads "menus/menu_%s_%s.res" per language; base class of every menu screen
+Class_29e848	MenuMain	MenuScreen subclass; menu "main"
+Class_29f4e0	MenuTitle	MenuScreen subclass; menu "title"
+Class_29e9b0	MenuOptions	"options", "options_ingame", menu.options.carousel
+Class_29b848	MenuAudio	"audio", "audio_ingame", menu.%s.carousel
+Class_29e328	MenuLanguage	menu "language"
+Class_29c518	MenuController	"controller", "controller_ingame", fx_%s_diagram
+Class_29f078	MenuRecords	menu "records"
+Class_29dd80	MenuHighScore	"high_score", menu.high_score.score_%d, hud digits
+Class_29ed88	MenuProgress	menu "progress", menus/textures/characters_progress/%s.res
+Class_29c9b0	MenuDigidex	"digidex", menus/digidex/characters/...
+Class_29dae8	MenuGameTips	"gametips", menus/gametips/fx_gametips_text, display_time
+Class_29b4b8	MenuArenaSelect	"arenas", menu.arena.carousel, carouselMarkers, firstUnlockable
+Class_29b6b8	MenuArenaSelectMulti	MenuArenaSelect subclass: "arena_multi", fx_%s_match_type / match_length
+Class_29b790	MenuArenaSelectPractice	MenuArenaSelect subclass: "arena_practice"
+Class_29d588	MenuDigimonSelect	menu.digi_select.digimon, menuDigimon%d; parent of the single/multi select screens
+Class_29d928	MenuDigimonSelectSingle	menu.digi_select.offset_single, menus/digi_single/...
+Class_29d698	MenuDigimonSelectMulti	"digi_multi", menus/digi_multi/...
+Class_29bd50	MenuChallenge	menus/challenge/fx_challenge_message, fx_challenge_player%d
+Class_29bf20	MenuScoreScreen	menu.%s.player_%d_score_total / score_gamemode
+Class_29c280	MenuConclusionMulti	MenuScoreScreen subclass: "conclusion_multi", fx_%s_player_%d_place
+Class_29c340	MenuConclusionSingle	MenuScoreScreen subclass: "conclusion_single"
+Class_29fa70	MenuWon	menus/won/fx_won_message, fx_won_press_any, menu.won
+Class_29e7b0	MenuLost	menu "lost"
+Class_29c468	MenuContinue	menus/continue/fx_continue_yes / _no
+Class_29eb08	MenuPause	menu "pause"
+Class_29f598	MenuUnlockArena	"unlock_arena", menus/unlock_arena/..., memcard fx_saving
+Class_29f6c0	MenuUnlockDigimon	"unlock_digimon", menus/unlock_digimon/..., memcard fx_saving
+Class_29f7f8	MenuUnlockMode	"unlock_mode", menus/unlock_mode/..., memcard fx_saving
+Class_29e600	MenuLogoBandai	menus/logo_bandai/fx_logo_bandai
+Class_29e6c8	MenuLogoBlackship	menus/logo_blackship/fx_logo_blackship (developer logo)
+Class_29e438	MenuLegal	menus/legal/fx_legal
+Class_29f930	MenuWarning	menus/warning/fx_warning
+Class_29e510	MenuBackgroundLevel	loads levels/menu, levels/menu_black, loc/%s/menus/level.res behind the menus
+Class_29dec0	MenuPanel	344-byte base of the digimon-select sub-panels
+Class_29e0f0	MenuPanelNameEntry	MenuPanel subclass: lock_letter / scroll_letter sounds
+Class_29e1a0	MenuPanelDigimonSelectJoin	MenuPanel subclass: fx_digi_multi_join%d, randompreview
+Class_29ba40	MenuUnlockablePortrait	1056-byte image entity: menus/textures/characters_unlockable/%s.tif, arenas_unlockable
+Class_29c820	MenuControllerImage	1056-byte image entity: controller_title_xbx.tif
+Class_29dc40	MenuGameTipImage	1056-byte image entity: gametips_tip_%d_xb?.tif
+Class_29f280	MenuCharacterPortrait	1056-byte image entity: menus/textures/characters_small/%s.tif
+Class_29f238	HudScore	interface/hud/hud_digits.tif, hud_minus.tif, %s_score_label_%d
+Class_29e4d0	LoadingScreenFx	loc/%s/menus/level/fx_loading
+Class_29d530	LabelGroup	"%s_labels", 28 bytes
+Class_29e968	Label	"%s_label", 24 bytes
+Class_29b2c0	GameMode	base of every game mode; plays "matchover", "timeup", "draw", "brawl", "tie_breaker"
+Class_297f98	GameModeKnockout	GameMode: loc/eng/minigames/ko/knockout_rumble.tif
+Class_298158	GameModeDigiRace	GameMode: loc/eng/minigames/digirace/digi_race.tif
+Class_2a1ed8	GameModePoison	GameMode: minigames/poison/poison.tif, poison_flag.tif
+Class_2a2e48	GameModeLittleVsBig	GameMode: minigames/littlevsbig/little_vs_big.tif
+Class_2a2c88	GameModeTimed	GameMode: minigames/practice/practice.tif and timed/timed_rumble.tif
+Class_2962a8	GameModeDemo	GameModeTimed subclass: "DEMO_MODE" (attract mode)
+Class_297018	GameModeScored	GameMode with a score display (mini_game/score/fx_score)
+Class_29a798	GameModeKeepAway	GameModeScored: minigames/keepaway/keep_away.tif
+Class_2970b0	GameModeCollection	GameModeScored: minigames/collection/collection.tif
+Class_2971b0	GameModeCrazyChase	GameModeScored: minigames/crazychase/crazy_chase.tif
+Class_299548	ArenaLevel	Screen subclass: gamecamera, camera_anchor_%d, upper_left_bounds/lower_right_bounds, "enable animated textures"
+Class_295f6c	CameraController	camera_anchor%d, camera_border%d, camera_control, camera_zone_lefttop/rightbottom
+Class_2984d8	PhysicsEntity	"friction", "thickness"; base of Fighter, bombs, projectiles and in-world menu images
+Class_297e08	AttackVolume	1472-byte PhysicsEntity that an attack creates: SetAttack(damage, scale, target, active) sets damage (+0x1f8) and active (+0x1e0); HitCharacter hits each player once (+0x5b8 flags) and ApplyDamage/ApplyKnockback act on the character hit; strings "knockdown", "dazed", "hitH", "lava" are hit-reaction types. (Was named Fighter before its slots were read.)
+Class_29fca0	Bomb	PhysicsEntity: characterConfig radius / zradius / weight / type "bomb"
+Class_2a2ab8	BouncingProjectile	PhysicsEntity: "projectileBounce"
+Class_298650	EffectEntity	PhysicsEntity: "update", "effect0".."effect2"
+Class_2968c0	WhackTarget	PhysicsEntity: "whack0", _sfx
+Class_2a2d98	BossLevelCan	PhysicsEntity: boss_level canIndex / delay / can
+Class_2a2fc8	BossLevelEffect	PhysicsEntity: boss_level effect / sound
+Class_2a29dc	ObjectDefinition	loads a definition from "characters/%s/%s" and Lua config (baseCollisionRadius, verticalCollisionRadius, collisionAspectRatio, /fx/fx_default, _sfx); base of the character, item and projectile definitions (was ConfiguredObject)
+Class_29a490	ItemDefinition	ObjectDefinition: itemConfig resourcePath / expireTime / gravity / pickupEffect, items/ (was Item)
+Class_2a2294	ProjectileDefinition	ObjectDefinition: projectileSpeed / maxDistance / balistic / balisticControl (was Projectile)
+Class_2a1894	CharacterDefinition	1980-byte ObjectDefinition holding one character's Lua config (characterConfig.%s with .air / .crouch, walkSpeed, AI keys); its 5 KB ctor reads 70 keys; ArenaLevel::ctor creates one per distinct Digimon in the match, so it is a definition, not the live character (was CharacterConfig)
+Class_2975d8	AnimationController	504-byte object, "empty anim list"
+Class_2a01c0	CharacterModel	1704-byte AnimationController: the character's visual/animation side; CreateEntityModel builds it for entity types 1-3 with that player's data; loads fx_player%d, fx_r_digivolve, fx_ko, fx_respawn, fx_woozy, minigame fx
+Class_296844	FinalBossPlatforms	levels/final_boss_arena/fx/fx_platform0%d
+Class_2a483c	ResourceLoadHook	"Destroying a ResourceLoadHook that wasn't constructed?"
+Class_297a98	GameObject	22-slot base of every in-match object; slot 15 (+0x3c) returns the entity type CreateEntityModel switches on (0 here); subclasses Character, PropObject, ProjectileObject
+Class_29fda0	Character	0x2f0-byte live player character; the match loader (0x92500) news one per occupied player slot ("Can't create player of species"), ctor(playerIndex, isCpu); entity type comes from its controller (2 AI, 3 pad); vtable at 0x29fda0 has 36 slots, a second vtable at +0xe0
+Class_29a1a0	PropObject	0x1f8-byte GameObject with entity type 4 (spirit egg, Culumon, Phantomon); CreateEntityModel gives it a 0x238-byte model
+Class_2a20c8	ProjectileObject	0x19c-byte GameObject with entity type 5; a Character spawns it and keeps its model in the list at +0xfc
+Class_293ef0	AIController	0x20-byte controller a CPU Character gets at +0xe8; owns a private 0xbc-byte virtual button block it fills itself (with random presses); slot 8 returns controller type 2
+Class_299e50	PadController	0xac-byte controller a human Character gets at +0xe8; ctor(playerIndex) takes the gamepad for that port (FUN_0009b460 -> table 0x2c3a5c); slot 8 returns controller type 3

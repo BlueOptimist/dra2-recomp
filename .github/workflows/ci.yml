@@ -1,0 +1,48 @@
+# Checks what this repository contains on its own. The game itself (decompiled code, data, assets) is not in the
+# repository, so the full build runs locally from your own disc; see README.md.
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Python tools compile
+        shell: pwsh
+        run: python -m py_compile (Get-ChildItem tools -Filter *.py -Recurse).FullName
+
+      - name: Headers compile, format struct sizes hold
+        shell: pwsh
+        run: |
+          $env:PATH = "C:\Program Files\LLVM\bin;$env:PATH"
+          clang --version
+          clang -fsyntax-only --target=i686-pc-windows-msvc -std=gnu11 -fms-extensions -Wno-comment -Idecomp tools/ci/header_check.c
+
+      - name: Build the platform layer (32-bit)
+        shell: pwsh
+        run: |
+          $env:PATH = "C:\Program Files\LLVM\bin;$env:PATH"
+          New-Item -ItemType Directory -Force out | Out-Null
+          $objs = foreach ($src in Get-ChildItem decomp/port -Filter *.c) {
+            $obj = "out/$($src.BaseName).obj"
+            clang -c --target=i686-pc-windows-msvc -std=gnu11 -fms-extensions -O2 -Wno-comment -Idecomp $src.FullName -o $obj
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            $obj
+          }
+          llvm-lib /out:out/dra2_port.lib $objs
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dra2_port-win32
+          path: out/dra2_port.lib

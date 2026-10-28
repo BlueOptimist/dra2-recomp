@@ -1,0 +1,55 @@
+base_class	slot	name	evidence
+MenuScreen	9	Update	returns the next screen; runs ProcessInput while inputEnabled, asks CanTransition before switching to nextScreen (+0x16c), calls UpdateInputEnabled while input is off; MenuArenaSelect calls the base then refreshes its carousel
+MenuScreen	16	Setup	overridden by 30 screens; MenuArenaSelect calls the base then loads its Lua config (digimons, arenas, menu.arena.carousel)
+MenuScreen	17	Teardown	empty in the base; MenuArenaSelect destroys all of its widgets
+MenuScreen	18	ProcessInput	loops over the 4 controllers calling HandlePlayerInput; swallows input while a reconnect dialog / system message is up (when WantsControllerCheck)
+MenuScreen	19	HandlePlayerInput	(dt, player): button presses -> OnButton(id), analog stick with 0.33 s repeat -> OnNavigate(direction)
+MenuScreen	20	OnButton	(id): MenuArenaSelect: 1 = confirm (plays "select", sets nextScreen), 2 = back (plays "cancel")
+MenuScreen	21	OnNavigate	(direction): called from HandlePlayerInput for stick directions; MenuArenaSelect moves its carousel
+MenuScreen	22	CanTransition	base returns true; Update only switches to nextScreen when it does; MenuArenaSelect waits for its panel
+MenuScreen	23	SetAnimState	(state): forwards to the menu background object; MenuArenaSelect forwards to every widget (vtable +0x58)
+MenuScreen	24	UpdateInputEnabled	base sets inputEnabled (+0x279) = 1; called by Update while input is off
+MenuScreen	25	CheckControllers	shows SysMsgReconnectController0..3 for disconnected pads; gated by WantsControllerCheck
+MenuScreen	26	WantsControllerCheck	base false, MenuArenaSelect true; gates CheckControllers and input swallowing
+MenuScreen	27	IsPrimaryControllerOnly	base false, MenuConclusionSingle true; CheckControllers then only watches the primary pad
+AttackVolume	1	Update	per frame: refreshes its scene slot, then sends overlapping objects (matching mask +0x84) a type-3 message with the volume's centre
+AttackVolume	19	HandleMessage	(msg): type 2 = contact: GetHitCharacter on the other object, then HitCharacter for object types 2-3 or HitObject for type 5; subclasses chain the base and add message 0xc handling
+AttackVolume	23	SetAttack	(damage, scale, target, active): damage/scale -> +0x1f8 (capped at 100, which sets ignoreGuard +0x1e3), active -> +0x1e0 (clears the per-player hit flags when off), target player -> +0x5b4
+AttackVolume	24	PostMessage	(msg): adds flag 0x20 and passes the message to the base
+AttackVolume	28	GetHitCharacter	(object): the character behind a contacted object if it is a live character (value at +0x244 above zero), else 0; subclasses also match their owner
+AttackVolume	29	HitObject	(object): for object type 5; uses FUN_0010dcd0 / FUN_0010e2c0 on it
+AttackVolume	30	HitCharacter	(character): skips players already hit (+0x5b8[player]), calls ApplyDamage, sends itself message 0xc with the damage, marks the player hit
+AttackVolume	32	ApplyDamage	(character): checks the hit is allowed (unless ignoreGuard), applies the target effect, then ApplyKnockback
+AttackVolume	34	ApplyKnockback	(character, source, ...): scales damage by frame time when not fixed, builds the knockback from the volume's matrix (+0x90) and hit type (+0x240), returns a float
+GameObject	15	GetEntityType	CreateEntityModel switches on it: 1-3 Character (CharacterModel), 4 PropObject, 5 ProjectileObject; Character forwards to its controller's GetControllerType
+Character	33	GetPlayerIndex	returns playerIndex (+0x170); CreateEntityModel uses it to pick the player's data at game+0x40+i*4
+AIController	8	GetControllerType	returns 2
+PadController	8	GetControllerType	returns 3
+GameObject	1	Update	per frame: saves velocity (+0x20) to the previous-velocity copy (+0x2c), adds frame time to the age at +0x94, re-registers in the world's spatial bucket; Character's 2.9 KB override runs movement, jumping and states
+GameObject	3	OnCollision	base returns 0; Character reads the contact (+0x58 other object, +0x5c point, +0xb8 normal), lands (clears jumpCount) and returns 1 or 2
+GameObject	5	UpdateVelocity	base subtracts gravity (+0xdc) * frame time from velocity z (+0x28); Character adds walk/run speed from its definition
+GameObject	7	PlayAnimation	(animId, mode) base forwards to the model's slot 27; Character also rumbles its controller for hit states 0x1d-0x1f; ResetState plays anim 1
+GameObject	11	UpdateFacing	turns toward the heading the model reports, clamped to the turn rate per frame
+GameObject	12	GetModel	returns the model at +0x18 (AnimationController / CharacterModel); its +0x188 is the current animation id
+GameObject	16	IsCharacter	true when GetEntityType is 2 or 3 (AI or pad controlled)
+GameObject	18	SetModel	(model) stores the model at +0x18 and the model's definition at +0x1c; Character then loads per-character data from the definition
+GameObject	19	Delete	calls the deleting destructor on itself
+Character	22	UpdateJump	per frame: reads the jump-hold action 0x1b, springboard bounce, superJump (definition) enables action 0x1c, the air-time float at +0x24c
+Character	26	ReadMoveInput	actions 0x18/0x19 give direction +1/-1 into +0x114..+0x11c; the stick amount (controller slot 3) goes to +0x228
+Character	27	CanJump	false while jumpCount (+0x174) has reached maxJumpCount (definition +0x70c) and miniJumpFactor (+0x700) is unset
+Character	29	TryDownJump	if CanJump and action 0x1a (stick down + jump button) fires, sets +0x284 and calls Character_Jump(20.0)
+Character	32	ResetState	clears velocity, state, grab and jump fields, plays animation 1
+Character	34	QueryButton	forwards to its controller's QueryButton
+Character	35	IsMoving	true when speed^2 >= 0.01 or a move/grab/stun field is set
+AIController	1	QueryButton	(action, ...) answers from its own virtual button block; returns false when disabled
+AIController	2	QueryAction	actions below 0x13 go to QueryButton; 0x14 and up are stick directions
+AIController	3	GetStickAmount	same interface as PadController slot 3; Character::ReadMoveInput reads it through +0xe8 without checking the controller type
+AIController	9	IsEnabled	returns +0x8; every query returns false when it is clear
+AIController	10	SetRumbleStrength	Character calls it with 1.0 on a heavy hit
+AIController	11	SetRumbleDuration	Character passes 0.75 s, or twice the frame time
+PadController	1	QueryButton	(action, ...) reads the pad's button table; returns false when disabled
+PadController	2	QueryAction	actions below 0x13 go to QueryButton; 0x14 and up are stick directions
+PadController	3	GetStickAmount	stick deflection past a 0.2 deadzone, rescaled to 0..1
+PadController	9	IsEnabled	returns +0x8; every query returns false when it is clear
+PadController	10	SetRumbleStrength	stores +0x54; Character calls it with 1.0 on a heavy hit
+PadController	11	SetRumbleDuration	stores +0x50 and +0x58 (remaining, read back by slot 12)

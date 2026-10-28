@@ -1,0 +1,171 @@
+address	name	evidence
+001d4c70	FatalErrorf	printf-style message, never returns ("Resource file \"%s\" appears to be corrupted")
+001c82a0	operator_new	called with object sizes before constructors (0x94, 0x15c, 0x170)
+00156770	Res_ValidateHeader	checks "res\n" magic, version 7.0, platform byte (GameCube/Xbox/...), per-type versions/alignments
+001acaf0	ResType_Find	looked up per chunk-type tag in Res_ValidateHeader
+001acbb0	ResType_Register	registers tag/version/alignment when ResType_Find fails
+00135830	Res_LoadFile	called with "animlist.res" / "levellist.res" before lookups
+00133d50	Res_Find	(name, fourcc, prev) -> resource; e.g. ("animlist", 'minf'), (name, 'lua!'), (name, 'banm')
+001b0ee0	Res_FindNextOfType	(fourcc, prev) iterator; loops over every 'body' / 'levl'
+00175b70	Lua_RunScriptResource	Res_Find(name, 'lua!') then load buffer + "_TRACEBACK" protected call
+0019a800	Character_PlayAnimByName	Res_Find(name, 'banm') then play on this character
+00155090	DebugMenu_AnimList	builds menu from animlist 'minf' ("Show this model", "couldn't get animlist")
+001552e0	DebugMenu_CharacterPreview	"Character preview...", iterates 'body' resources
+001556a0	DebugMenu_ChangeLevel	"Change level...", iterates 'levl' resources from levellist.res
+0014e4f0	DebugMenuItem_ctor	(label) used for every debug menu entry
+0014f100	DebugMenu_AddItem	adds a constructed DebugMenuItem
+0014c010	DebugMenu_SetStatus	(menu, text) e.g. "Change level...", "Couldn't get anim list resource."
+000a80b0	CreateEntityModel	method of the object at world+0x138: asks the entity (desc+0x34) for its type (vtable +0x3c) and player index (+0x84); types 1-3 -> CharacterModel (with that player's data), 4 -> 0x238-byte model, 5 -> Class_2a21e8, else AnimationController
+001b3f80	lua_io_input	luaL_reg table at 002aca18 entry "input"
+001b3fa0	lua_io_output	luaL_reg table at 002aca18 entry "output"
+001b52b0	lua_io_lines	luaL_reg table at 002aca18 entry "lines"
+001b3b80	lua_io_close	luaL_reg table at 002aca18 entry "close"
+001b4740	lua_io_flush	luaL_reg table at 002aca18 entry "flush"
+001b3ce0	lua_io_open	luaL_reg table at 002aca18 entry "open"
+001b3db0	lua_io_popen	luaL_reg table at 002aca18 entry "popen"
+001b4320	lua_io_read	luaL_reg table at 002aca18 entry "read"
+001b3dd0	lua_io_tmpfile	luaL_reg table at 002aca18 entry "tmpfile"
+001b39c0	lua_io_type	luaL_reg table at 002aca18 entry "type"
+001b4560	lua_io_write	luaL_reg table at 002aca18 entry "write"
+001b4800	lua_file_flush	luaL_reg table at 002aca78 entry "flush"
+001b4390	lua_file_read	luaL_reg table at 002aca78 entry "read"
+001b5230	lua_file_lines	luaL_reg table at 002aca78 entry "lines"
+001b4630	lua_file_seek	luaL_reg table at 002aca78 entry "seek"
+001b45d0	lua_file_write	luaL_reg table at 002aca78 entry "write"
+001b3c10	lua_file_gc	luaL_reg table at 002aca78 entry "__gc"
+001b3c50	lua_file_tostring	luaL_reg table at 002aca78 entry "__tostring"
+001b49e0	lua_os_clock	luaL_reg table at 002acaf8 entry "clock"
+001b4af0	lua_os_date	luaL_reg table at 002acaf8 entry "date"
+001b5010	lua_os_difftime	luaL_reg table at 002acaf8 entry "difftime"
+001b48e0	lua_os_execute	luaL_reg table at 002acaf8 entry "execute"
+001b50f0	lua_os_exit	luaL_reg table at 002acaf8 entry "exit"
+001b49c0	lua_os_getenv	luaL_reg table at 002acaf8 entry "getenv"
+001b4900	lua_os_remove	luaL_reg table at 002acaf8 entry "remove"
+001b4930	lua_os_rename	luaL_reg table at 002acaf8 entry "rename"
+001b5060	lua_os_setlocale	luaL_reg table at 002acaf8 entry "setlocale"
+001b4d80	lua_os_time	luaL_reg table at 002acaf8 entry "time"
+001b4970	lua_os_tmpname	luaL_reg table at 002acaf8 entry "tmpname"
+001b5670	lua_db_getlocal	luaL_reg table at 002ace38 entry "getlocal"
+001b53e0	lua_db_getinfo	luaL_reg table at 002ace38 entry "getinfo"
+001b5a90	lua_db_gethook	luaL_reg table at 002ace38 entry "gethook"
+001b57f0	lua_db_getupvalue	luaL_reg table at 002ace38 entry "getupvalue"
+001b59f0	lua_db_sethook	luaL_reg table at 002ace38 entry "sethook"
+001b5700	lua_db_setlocal	luaL_reg table at 002ace38 entry "setlocal"
+001b5850	lua_db_setupvalue	luaL_reg table at 002ace38 entry "setupvalue"
+001b5b40	lua_db_debug	luaL_reg table at 002ace38 entry "debug"
+001b5be0	lua_db_traceback	luaL_reg table at 002ace38 entry "traceback"
+001b5e20	lua_math_abs	luaL_reg table at 002ad018 entry "abs"
+001b5e50	lua_math_sin	luaL_reg table at 002ad018 entry "sin"
+001b5e80	lua_math_cos	luaL_reg table at 002ad018 entry "cos"
+001b5eb0	lua_math_tan	luaL_reg table at 002ad018 entry "tan"
+001b5ee0	lua_math_asin	luaL_reg table at 002ad018 entry "asin"
+001b5f10	lua_math_acos	luaL_reg table at 002ad018 entry "acos"
+001b5f40	lua_math_atan	luaL_reg table at 002ad018 entry "atan"
+001b5f70	lua_math_atan2	luaL_reg table at 002ad018 entry "atan2"
+001b5fb0	lua_math_ceil	luaL_reg table at 002ad018 entry "ceil"
+001b5fe0	lua_math_floor	luaL_reg table at 002ad018 entry "floor"
+001b6010	lua_math_mod	luaL_reg table at 002ad018 entry "mod"
+001b61e0	lua_math_frexp	luaL_reg table at 002ad018 entry "frexp"
+001b6230	lua_math_ldexp	luaL_reg table at 002ad018 entry "ldexp"
+001b6060	lua_math_sqrt	luaL_reg table at 002ad018 entry "sqrt"
+001b6270	lua_math_min	luaL_reg table at 002ad018 entry "min"
+001b62e0	lua_math_max	luaL_reg table at 002ad018 entry "max"
+001b60e0	lua_math_log	luaL_reg table at 002ad018 entry "log"
+001b6110	lua_math_log10	luaL_reg table at 002ad018 entry "log10"
+001b6140	lua_math_exp	luaL_reg table at 002ad018 entry "exp"
+001b6180	lua_math_deg	luaL_reg table at 002ad018 entry "deg"
+001b6090	lua_math_pow	luaL_reg table at 002ad018 entry "pow"
+001b61b0	lua_math_rad	luaL_reg table at 002ad018 entry "rad"
+001b6350	lua_math_random	luaL_reg table at 002ad018 entry "random"
+001b64a0	lua_math_randomseed	luaL_reg table at 002ad018 entry "randomseed"
+001b6810	lua_table_concat	luaL_reg table at 002ad1b8 entry "concat"
+001b65d0	lua_table_foreach	luaL_reg table at 002ad1b8 entry "foreach"
+001b6530	lua_table_foreachi	luaL_reg table at 002ad1b8 entry "foreachi"
+001b6660	lua_table_getn	luaL_reg table at 002ad1b8 entry "getn"
+001b66a0	lua_table_setn	luaL_reg table at 002ad1b8 entry "setn"
+001b6d80	lua_table_sort	luaL_reg table at 002ad1b8 entry "sort"
+001b66d0	lua_table_insert	luaL_reg table at 002ad1b8 entry "insert"
+001b6770	lua_table_remove	luaL_reg table at 002ad1b8 entry "remove"
+001b6e00	lua_str_len	luaL_reg table at 002ad288 entry "len"
+001b6e50	lua_str_sub	luaL_reg table at 002ad288 entry "sub"
+001b6f00	lua_str_lower	luaL_reg table at 002ad288 entry "lower"
+001b6fa0	lua_str_upper	luaL_reg table at 002ad288 entry "upper"
+001b7140	lua_str_char	luaL_reg table at 002ad288 entry "char"
+001b7040	lua_str_rep	luaL_reg table at 002ad288 entry "rep"
+001b70c0	lua_str_byte	luaL_reg table at 002ad288 entry "byte"
+001b84a0	lua_str_format	luaL_reg table at 002ad288 entry "format"
+001b7210	lua_str_dump	luaL_reg table at 002ad288 entry "dump"
+001b7c60	lua_str_find	luaL_reg table at 002ad288 entry "find"
+001b7f20	lua_str_gfind	luaL_reg table at 002ad288 entry "gfind"
+001b8090	lua_str_gsub	luaL_reg table at 002ad288 entry "gsub"
+001b8930	luaB_error	luaL_reg table at 002ad518 entry "error"
+001b89b0	luaB_getmetatable	luaL_reg table at 002ad518 entry "getmetatable"
+001b8a00	luaB_setmetatable	luaL_reg table at 002ad518 entry "setmetatable"
+001b8b60	luaB_getfenv	luaL_reg table at 002ad518 entry "getfenv"
+001b8bb0	luaB_setfenv	luaL_reg table at 002ad518 entry "setfenv"
+001b8dc0	luaB_next	luaL_reg table at 002ad518 entry "next"
+001b8e40	luaB_ipairs	luaL_reg table at 002ad518 entry "ipairs"
+001b8e00	luaB_pairs	luaL_reg table at 002ad518 entry "pairs"
+001b8760	luaB_print	luaL_reg table at 002ad518 entry "print"
+001b8810	luaB_tonumber	luaL_reg table at 002ad518 entry "tonumber"
+001b9150	luaB_tostring	luaL_reg table at 002ad518 entry "tostring"
+001b8d90	luaB_type	luaL_reg table at 002ad518 entry "type"
+001b9010	luaB_assert	luaL_reg table at 002ad518 entry "assert"
+001b9060	luaB_unpack	luaL_reg table at 002ad518 entry "unpack"
+001b8c70	luaB_rawequal	luaL_reg table at 002ad518 entry "rawequal"
+001b8ca0	luaB_rawget	luaL_reg table at 002ad518 entry "rawget"
+001b8cd0	luaB_rawset	luaL_reg table at 002ad518 entry "rawset"
+001b90b0	luaB_pcall	luaL_reg table at 002ad518 entry "pcall"
+001b9100	luaB_xpcall	luaL_reg table at 002ad518 entry "xpcall"
+001b8d60	luaB_collectgarbage	luaL_reg table at 002ad518 entry "collectgarbage"
+001b8d10	luaB_gcinfo	luaL_reg table at 002ad518 entry "gcinfo"
+001b8f90	luaB_loadfile	luaL_reg table at 002ad518 entry "loadfile"
+001b8fd0	luaB_dofile	luaL_reg table at 002ad518 entry "dofile"
+001b8f30	luaB_loadstring	luaL_reg table at 002ad518 entry "loadstring"
+001b9480	luaB_require	luaL_reg table at 002ad518 entry "require"
+001b9820	lua_co_create	luaL_reg table at 002ad5e8 entry "create"
+001b9880	lua_co_wrap	luaL_reg table at 002ad5e8 entry "wrap"
+001b9740	lua_co_resume	luaL_reg table at 002ad5e8 entry "resume"
+001b98b0	lua_co_yield	luaL_reg table at 002ad5e8 entry "yield"
+001b98d0	lua_co_status	luaL_reg table at 002ad5e8 entry "status"
+001b2790	luaL_where	formats "%s:%d: " (lauxlib.c)
+001b29c0	luaL_checkstack	"stack overflow (%s)" (lauxlib.c)
+001b3460	luaL_loadbuffer	(L, buffer, size, name) on lua! resource text (lauxlib.c)
+001b3600	luaL_argerror	"bad argument #%d to `%s' (%s)" (lauxlib.c)
+001b9370	getpath	"LUA_PATH" (lbaselib.c require)
+001b96c0	auxresume	"too many arguments to resume" (lbaselib.c)
+001b9970	base_open	sets "_G" and "_VERSION" (lbaselib.c)
+001b9a30	luaopen_base	registers "coroutine" and "_LOADED" (lbaselib.c)
+001bb630	luaD_growstack	"stack overflow" (ldo.c)
+001bbb40	luaD_call	"C stack overflow" (ldo.c)
+001bbc80	lua_yield	"attempt to yield across metamethod/C-call boundary" (ldo.c)
+001bcc80	lua_getinfo	"value for `lua_getinfo' is not a function" (ldebug.c)
+001bcd40	luaG_typeerror	"attempt to %s a %s value" (ldebug.c)
+001bce30	luaG_ordererror	"attempt to compare two %s values" (ldebug.c)
+001be7c0	luaV_execute	"`for' initial value must be a number" (lvm.c)
+001c1b20	read_numeral	"malformed number" (llex.c)
+001c1f10	luaX_checklimit	"too many %s (limit=%d)" (llex.c)
+001c1f40	inclinenumber	"lines in a chunk" (llex.c)
+001c2240	read_string	"unfinished string" (llex.c)
+001c41c0	primaryexp	"unexpected symbol" (lparser.c)
+001c64c0	LoadFunction	"bad nupvalues in %s" (lundump.c)
+001c6560	LoadConstants	"bad constant type (%d) in %s" (lundump.c)
+001c69c0	LoadHeader	"%s too new: read version" (lundump.c)
+001c6b90	luaU_undump	"binary string" (lundump.c)
+001c71f0	luaK_code	"code size overflow" (lcode.c)
+001c6ff0	addk	"constant table overflow" (lcode.c)
+00092500	LoadMatch	builds the game mode from the mode number (Knockout, DigiRace, Collection, KeepAway, Poison, CrazyChase, LittleVsBig, Demo, Timed), then one Character per occupied player slot and its model via CreateEntityModel
+000e9480	Character_Reset	clears Character state; creates the controller at +0xe8: AIController when isCpu, else PadController(playerIndex)
+000809f0	GameObject_GetFrameTime	returns world (+0xc) +0x1c, the frame time every timer subtracts
+00080bf0	GameObject_GetAnimState	returns the model's (+0x18) current animation id at +0x188
+000e5bc0	Character_Jump	(speed) called with 20.0 by TryJump and 10.0 for a springboard bounce
+000e6250	TryDownJump	Character slot 29: if CanJump and ACT_DOWN_JUMP (0x1a: stick down + jump button), sets +0x284 and calls Character_Jump(20.0)
+00095200	SetControlScheme	(scheme, player) fills the player's button tables 0x2f6164..0x2f61b4 with raw pad indices (see decomp/input_actions.h)
+00099050	PadController_JumpButton	this player's BIND_JUMP pad index (table 0x2f6164), remapped through +0x5c while +0x4 > 0
+00099080	PadController_Button2	this player's BIND_BUTTON2 pad index (table 0x2f6174)
+000990b0	PadController_Button3	this player's BIND_BUTTON3 pad index (table 0x2f6184)
+000990e0	PadController_BlockButton	this player's BIND_BLOCK pad index (table 0x2f6194, left trigger)
+00099110	PadController_Button4	this player's BIND_BUTTON4 pad index (table 0x2f61a4)
+00099140	PadController_DigivolveButton	this player's BIND_DIGIVOLVE pad index (table 0x2f61b4, right trigger)
+000991a0	PadController_StickVertical	stick axis rotated by the arena's camera side (+0x90); positive is up
+00099220	PadController_StickHorizontal	stick axis rotated by the arena's camera side (+0x90); positive is right

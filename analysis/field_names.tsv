@@ -1,0 +1,18 @@
+base_class	offset	name	evidence
+MenuScreen	0x16c	nextScreen	Update returns it when CanTransition; OnButton sets it (MenuArenaSelect: 0x21 on confirm)
+MenuScreen	0x279	inputEnabled	set by UpdateInputEnabled; Update only calls ProcessInput while it is nonzero
+AttackVolume	0x1e0	active	SetAttack(..., active); HandleMessage only reacts to contacts while it is set
+AttackVolume	0x1e3	ignoreGuard	set by SetAttack when damage >= 100; ApplyDamage/ApplyKnockback skip the guard check when set
+AttackVolume	0x1f8	damage	SetAttack: damage / scale, capped at 100; passed along in HitCharacter's message
+AttackVolume	0x5b4	target	SetAttack: the target object chosen from the target player
+AttackVolume	0x5b8	hitPlayer0	per-player "already hit" flags (players 0-3 at +0x5b8..+0x5bb), cleared when the volume turns off
+Character	0xe8	controller	AIController or PadController made in Reset (0x0e9480) from the isCpu flag; GetEntityType forwards to its GetControllerType
+Character	0x170	playerIndex	ctor argument; GetPlayerIndex returns it; selects the pad and the per-player table entry
+GameObject	0xc	world	frame time at world+0x1c (GameObject_GetFrameTime)
+GameObject	0x18	model	SetModel stores it; GetModel returns it
+GameObject	0x1c	definition	SetModel copies it from the model; Character reads its CharacterDefinition keys through it
+GameObject	0x20	velocityX	UpdateVelocity / IsMoving
+GameObject	0x24	velocityY	UpdateVelocity / IsMoving
+GameObject	0x28	velocityZ	gravity is subtracted from it each frame
+GameObject	0xdc	gravity	UpdateVelocity: velocityZ -= gravity * frame time
+Character	0x174	jumpCount	CanJump compares it with maxJumpCount; OnCollision clears it on landing

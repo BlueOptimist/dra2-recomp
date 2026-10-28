@@ -1,0 +1,33 @@
+# Whitelist. This repository holds only our own work: tools, the Windows platform layer, headers we wrote, notes
+# and the hand-made naming tables. Everything from the game stays local: the disc image, extracted/unpacked
+# assets, the Ghidra project, the decompiled code (decomp/src, decomp/lib), generated build files and data dumps.
+# To add a file, add a "!" line for it below; never un-ignore a whole directory.
+
+/*
+!/.gitignore
+!/.gitattributes
+!/README.md
+!/.github/
+
+!/tools/
+/tools/__pycache__/
+
+!/decomp/
+/decomp/*
+!/decomp/README.md
+!/decomp/ghidra_types.h
+!/decomp/dra2_formats.h
+!/decomp/input_actions.h
+!/decomp/port/
+/decomp/port/*
+!/decomp/port/platform.c
+!/decomp/port/cxx_runtime.c
+
+!/analysis/
+/analysis/*
+!/analysis/modules.tsv
+!/analysis/classes.tsv
+!/analysis/class_names.tsv
+!/analysis/function_names.tsv
+!/analysis/slot_names.tsv
+!/analysis/field_names.tsv
