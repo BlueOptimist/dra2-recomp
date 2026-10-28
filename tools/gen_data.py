@@ -258,6 +258,8 @@ def main():
         c = undecorate(raw)
         if raw.startswith("__imp_"):
             kinds["Windows API import (kernel32 etc., provided by import libraries at link time)"] += 1
+        elif re.match(r"lua_|luaL_|luaopen_", c):
+            kinds["Lua 5.0 API (from the Lua 5.0 source, LUA_NUMBER float, at link time)"] += 1
         elif c in WINDOWS_CRT:
             kinds["C runtime (provided by the Windows CRT at link time)"] += 1
         elif re.match(r"(?:thunk_)?(?:FUN|LAB)_", c):

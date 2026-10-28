@@ -298,7 +298,32 @@ Three things came up along the way:
 - **Wrong calling conventions.** Six already-named CRT functions had been committed as `__stdcall` (`__stricmp`, `__strnicmp`, `__vsnprintf`, `__controlfp`, `__ceil_default`, `__floor_default`). Linked against the real cdecl CRT, that would have broken both the symbol names and the stack. They're cdecl now.
 - **Module boundary.** `0x1dd3a0–0x1dd5ff` isn't CRT. It's the engine's R250 random generator and small allocator helpers, so they now go to `src/engine_core` and are compiled. The CRT starts at `_memmove` (`0x1dd600`).
 
-All C runtime calls now resolve to the Windows CRT or to the port. The only unnamed library functions left are **43 Lua 5.0 functions**.
+All C runtime calls now resolve to the Windows CRT or to the port.
+
+### Lua 5.0 (`analysis/lua_signatures.tsv`)
+
+The game calls 45 functions of its embedded Lua 5.0. 43 had no name. Each was identified from how it manipulates the Lua stack. For example, `lua_gettop` is `(top − base) >> 3`, and `lua_touserdata` handles tag 2 (light) and tag 7 (full, body at `+0x10`). The five `luaopen_*` functions were identified by the library names they register (`os`/io, `debug`, `math`, `table`, `string`).
+The same script, `ApplyCrtSignatures.java`, applies the table, with exact Lua 5.0 prototypes. Several had been typed `__thiscall`, which put a bogus extra argument on every call; all are cdecl now, as the Lua C API is. `luaopen_base` was fixed from `__stdcall` too.
+
+**This build's Lua uses `float` numbers.** A `TObject` is 8 bytes (a 4-byte tag and a 4-byte value), and `lua_pushnumber`/`lua_tonumber` move a 4-byte float. So the port has to compile the stock **Lua 5.0 source with `LUA_NUMBER` defined as `float`** for the API to match.
+The game's scripts are plain-text Lua (in `lua.res`/`characterlua.res`), so there's no bytecode format to match.
+
+| functions | |
+|---|---|
+| core API (38) | `lua_open`, `lua_gettop`/`settop`/`insert`/`remove`/`pushvalue`, `lua_type`/`isnumber`/`isstring`/`toboolean`/`tonumber`/`tostring`/`touserdata`, `lua_push{nil,number,lstring,string,cclosure}`, `lua_newtable`/`newuserdata`/`newthread`, `lua_{get,set}table`, `lua_rawget`/`rawgeti`, `lua_next`, `lua_setmetatable`/`setfenv`, `lua_call`/`pcall`/`resume`/`error`, `lua_xmove`, `lua_setgcthreshold` |
+| auxiliary (4) | `luaL_error`, `luaL_ref`, `luaL_unref`, `luaL_optlstring` (plus the already named `luaL_loadbuffer`) |
+| standard libraries (5) | `luaopen_io`, `luaopen_debug`, `luaopen_math`, `luaopen_table`, `luaopen_string` (plus `luaopen_base`) |
+
+With that, **every library function the game calls is identified**. 365 symbols remain undefined; 129 of them come with the link:
+- 46 from the Windows CRT;
+- 45 from Lua 5.0 (float build);
+- 38 from Win32 imports.
+
+The rest is:
+- 193 decompiler pseudo-variables;
+- 20 data labels inside the XDK sections;
+- 16 bare method names and the like;
+- 7 small static-init code labels.
 
 ### Xbox kernel imports
 

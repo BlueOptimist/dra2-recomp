@@ -35,3 +35,4 @@
 !/analysis/slot_names.tsv
 !/analysis/field_names.tsv
 !/analysis/crt_signatures.tsv
+!/analysis/lua_signatures.tsv

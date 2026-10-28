@@ -1,0 +1,45 @@
+address	signature	storage	evidence
+001b2800	int __cdecl luaL_error(void *L, char *fmt, ...);		luaL_where(L, 1), pushvfstring, concat 2, lua_error
+001b30e0	int __cdecl luaL_ref(void *L, int t);		turns a relative index absolute (LUA_REGISTRYINDEX -10000 excepted), reuses the free list in t[0]
+001b31b0	void __cdecl luaL_unref(void *L, int t, int ref);		ref >= 0: t[ref] = t[0]; t[0] = ref
+001b3810	char * __cdecl luaL_optlstring(void *L, int narg, char *def, size_t *len);		lua_type(L, narg) <= 0 -> def (and strlen(def) into *len)
+001b5110	int __cdecl luaopen_io(void *L);		opens "os" (clock, ...) then the "FILE*" metatable and io (flush, ...), as liolib.c
+001b5dd0	int __cdecl luaopen_debug(void *L);		opens "debug" (getlocal, ...), registers _TRACEBACK
+001b64c0	int __cdecl luaopen_math(void *L);		opens "math", sets pi = 3.1415927f, registers __pow
+001b6de0	int __cdecl luaopen_table(void *L);		opens "table" (concat, ...)
+001b8740	int __cdecl luaopen_string(void *L);		opens "string"
+001b9bb0	void __cdecl lua_xmove(void *from, void *to, int n);		moves n values from one stack to another
+001b9c20	void * __cdecl lua_newthread(void *L);		GC check, luaE_newthread, pushes tag 8 (thread)
+001b9c60	int __cdecl lua_gettop(void *L);		(top - base) >> 3
+001b9c70	void __cdecl lua_settop(void *L, int idx);		negative: top += idx + 1; else nil-fills up to base + idx
+001b9cd0	void __cdecl lua_remove(void *L, int idx);		shifts the values above idx down
+001b9d20	void __cdecl lua_insert(void *L, int idx);		shifts up, puts the top value at idx
+001b9db0	void __cdecl lua_pushvalue(void *L, int idx);		copies the value at idx to the top
+001b9de0	int __cdecl lua_type(void *L, int idx);		tag of the value, -1 (LUA_TNONE) for an invalid index
+001b9e70	int __cdecl lua_isnumber(void *L, int idx);		tag 3 or convertible (luaV_tonumber)
+001b9ec0	int __cdecl lua_isstring(void *L, int idx);		tag 4 (string) or 3 (number)
+001ba0a0	float __cdecl lua_tonumber(void *L, int idx);		lua_Number is float in this build: returns the 4-byte value
+001ba0f0	int __cdecl lua_toboolean(void *L, int idx);		not nil and not false
+001ba130	char * __cdecl lua_tostring(void *L, int idx);		tag 4 -> string body (+0x10), else luaV_tostring
+001ba240	void * __cdecl lua_touserdata(void *L, int idx);		tag 2 (light) -> value, tag 7 (full) -> body (+0x10)
+001ba340	void __cdecl lua_pushnil(void *L);		writes tag 0, top += 1
+001ba360	void __cdecl lua_pushnumber(void *L, float n);		writes tag 3 and the 4-byte float
+001ba380	void __cdecl lua_pushlstring(void *L, char *s, size_t len);		GC check, luaS_newlstr, tag 4
+001ba3d0	void __cdecl lua_pushstring(void *L, char *s);		NULL -> nil, else strlen + pushlstring
+001ba4a0	void __cdecl lua_pushcclosure(void *L, void *fn, int n);		luaF_newCclosure with n upvalues taken from the stack
+001ba570	void __cdecl lua_gettable(void *L, int idx);		luaV_gettable(t, key at top-1), result replaces the key
+001ba5c0	void __cdecl lua_rawget(void *L, int idx);		luaH_get, result replaces the key
+001ba610	void __cdecl lua_rawgeti(void *L, int idx, int n);		luaH_getnum, pushes the result
+001ba660	void __cdecl lua_newtable(void *L);		GC check, luaH_new(L, 0, 0), tag 5
+001ba760	void __cdecl lua_settable(void *L, int idx);		luaV_settable(t, key at top-2, value at top-1), pops 2
+001ba840	int __cdecl lua_setmetatable(void *L, int objindex);		table (5) or userdata (7) only; nil sets the default
+001ba8b0	int __cdecl lua_setfenv(void *L, int idx);		Lua function (tag 6, not C) only: its globals become the top value
+001ba910	void __cdecl lua_call(void *L, int nargs, int nresults);		luaD_call(L, top - (nargs + 1), nresults)
+001ba960	int __cdecl lua_pcall(void *L, int nargs, int nresults, int errfunc);		luaD_pcall with the error function's stack offset
+001bab60	void __cdecl lua_setgcthreshold(void *L, int newthreshold);		threshold KB << 10, collects if already exceeded
+001babb0	int __cdecl lua_error(void *L);		luaG_errormsg
+001babc0	int __cdecl lua_next(void *L, int idx);		luaH_next on the table at idx
+001bac90	void * __cdecl lua_newuserdata(void *L, size_t size);		luaS_newudata, tag 7, returns the body (+0x10)
+001bb270	void * __cdecl lua_open(void);		allocates the 0x58-byte lua_State and initialises it
+001bbe90	int __cdecl lua_resume(void *L, int narg);		luaD_rawrunprotected(L, resume, &narg)
+001b9a30	int __cdecl luaopen_base(void *L);		named already; was given __stdcall
