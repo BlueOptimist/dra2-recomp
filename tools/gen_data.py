@@ -35,7 +35,7 @@ strcmp strcpy strcat rand srand isdigit isspace isalpha toupper tolower atol ato
 _vsnprintf vsprintf _copysign _controlfp ceil floor fread fwrite fopen fclose fseek ftell free malloc realloc calloc
 log2 log log10 exp exp2 pow sqrt sin cos tan atan atan2 asin acos fabs fmod ldexp rint _allrem _allmul _alldiv
 _aulldiv _aullrem _allshl _allshr _aullshr _chkstk _alloca_probe _fltused _ftol _ftol2 _ftol2_sse printf abort
-exit""".split())
+exit _finite _strdup _cexit""".split())
 
 
 def xbe_sections(path):

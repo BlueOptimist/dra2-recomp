@@ -282,6 +282,24 @@ All of them are `__stdcall`, except `XPhysicalFree`, which the game's prototype 
   - Rumble: the game writes the motor speeds at `+0x42`/`+0x44` of `XINPUT_FEEDBACK` (checked at its call site).
 - **Settings:** English, NTSC, 4:3. `XLaunchNewImageA` (back to the dashboard) quits.
 
+### C runtime (`analysis/crt_signatures.tsv`, `ApplyCrtSignatures.java`)
+
+The game called 24 C runtime functions that Ghidra's library signatures hadn't named. Each was identified from its code and its call sites, and the table gives each one a name and an exact C signature. `ApplyCrtSignatures.java` applies the table.
+
+| identified as | how it's provided |
+|---|---|
+| `strstr`, `strchr`, `tolower`, `toupper`, `_finite`, `atof`, `free`, `_strdup`, `_cexit` | Windows CRT, under those names (cdecl) |
+| `_ftol`, `_CIacos`, `_CIasin`, `_CIatan2`, `_CIpow` (as `CRT_…`) | `port/crt_math.c` |
+| `exception::exception()`, copy constructor, `_CxxThrowException` (as `CRT_…`) | `port/cxx_runtime.c`; a throw is reported and aborts, since the port has no exception frames |
+| `CreateDirectoryA` (`0x1eb830`, really XAPI) | `port/xapi.c`, with drive-letter mapping |
+
+Three things came up along the way:
+- **x87 helpers.** MSVC passes their operands on the FPU stack (`_ftol`: `ST0` → `EDX:EAX`; `_CIpow(x, y)`: `ST1`, `ST0`). The decompiled calls had lost those arguments. The table gives them custom register storage, so every call site now shows them, e.g. `CRT_ftol((float10)dVar7)`, and they become ordinary C functions in the port.
+- **Wrong calling conventions.** Six already-named CRT functions had been committed as `__stdcall` (`__stricmp`, `__strnicmp`, `__vsnprintf`, `__controlfp`, `__ceil_default`, `__floor_default`). Linked against the real cdecl CRT, that would have broken both the symbol names and the stack. They're cdecl now.
+- **Module boundary.** `0x1dd3a0–0x1dd5ff` isn't CRT. It's the engine's R250 random generator and small allocator helpers, so they now go to `src/engine_core` and are compiled. The CRT starts at `_memmove` (`0x1dd600`).
+
+All C runtime calls now resolve to the Windows CRT or to the port. The only unnamed library functions left are **43 Lua 5.0 functions**.
+
 ### Xbox kernel imports
 
 The XBE imports **158 kernel functions** through the thunk table at the start of `.rdata` (`0x292980`, one `0x80000000 | ordinal` word each). Ghidra's loader labels every entry with its kernel name.

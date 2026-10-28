@@ -210,6 +210,13 @@ unsigned char __stdcall FUN_0012f1fd(const char *name)
     return DeleteFileA(map_path(name, path, sizeof path)) != 0;
 }
 
+/* 0x1eb830 (NtCreateFile with FILE_DIRECTORY_FILE + FILE_CREATE): CreateDirectoryA */
+int __stdcall XAPI_CreateDirectoryA(const char *name, void *security)
+{
+    char path[MAX_PATH];
+    return CreateDirectoryA(map_path(name, path, sizeof path), security);
+}
+
 /* FUN_00125782: GetDiskFreeSpaceExA */
 int __stdcall FUN_00125782(const char *dir, ULONGLONG *avail, ULONGLONG *total, ULONGLONG *free_)
 {

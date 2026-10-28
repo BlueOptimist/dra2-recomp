@@ -42,6 +42,40 @@ void __stdcall ____C_YGXPAX0IHP6EX00_ZP6EX0_Z_Z(void *dst, void *src, unsigned s
         copy(d, s);
 }
 
+/* std::exception is { vftable, what, owns_what }; the vftable stays the game's own (0x2afeb0, in the generated
+ * data). */
+extern void *PTR_FUN_002afeb0;
+char *_strdup(const char *s);
+int printf(const char *format, ...);
+void abort(void);
+
+/* exception::exception() */
+void __fastcall CRT_exception_ctor(void **self)
+{
+    self[0] = &PTR_FUN_002afeb0;
+    self[1] = 0;
+    self[2] = 0;
+}
+
+/* exception::exception(const exception &): an owned message is copied */
+void *__thiscall CRT_exception_copy(void **self, void **source)
+{
+    self[0] = &PTR_FUN_002afeb0;
+    self[2] = source[2];
+    self[1] = source[2] ? _strdup((const char *)source[1]) : source[1];
+    return self;
+}
+
+/* _CxxThrowException: the port is built without C++ exception frames (see tools/compile_check.py), so a throw can't
+ * be caught. Report it and stop. */
+void __stdcall CRT_CxxThrowException(void **object, void *throw_info)
+{
+    (void)throw_info;
+    printf("[port] C++ exception thrown (%s); exceptions are not supported\n",
+           object && object[1] ? (const char *)object[1] : "no message");
+    abort();
+}
+
 /* exception::~exception(): { vftable, what, owns_what } -- frees the message it owns */
 void __fastcall __1exception__UAE_XZ(void **self)
 {

@@ -1,8 +1,9 @@
 """Generate weak stand-ins for every Xbox system symbol the game still needs: decomp/port/xbox_stubs.c.
 
-Usage: python gen_platform_stubs.py <decomp_dir>
+Usage: python gen_platform_stubs.py <decomp_dir> <llvm_bin_dir>
 
-Reads build/data/data_report.txt (tools/gen_data.py) for what is still undefined, and build/program.h for each
+Run after tools/build_objects.py. Lists, with llvm-nm, what the game objects need and don't define, and reads
+build/program.h for each
 function's exact prototype (calling convention and parameters decide the decorated name the game links against).
   - Xbox API functions (D3D8__, DSOUND__, XAPILIB__, XGRAPHC__/XGRAPHICS__, and unnamed FUN_s in the XDK sections and
     lib/xapi) get a body that reports the call once through port_todo() and returns 0
@@ -10,13 +11,17 @@ function's exact prototype (calling convention and parameters decide the decorat
 Every definition is weak: a real implementation anywhere in decomp/port/ replaces it at link time, so the platform
 layer can be written one function at a time.
 """
+import glob
 import os
 import re
+import subprocess
 import sys
 
 API = re.compile(r"^(?:D3D8|DSOUND|XAPILIB|XGRAPHC|XGRAPHICS|D3DX)__\w+$")
-XDK_START = 0x217200  # D3D, D3DX, XGRPH, DSOUND, XPP, DOLBY sections follow .text
-XAPI_RANGES = [(0x1256F0, 0x12F600), (0x1EBD00, 0x1EDA20), (0x1F9DA0, 0x1F9DB3)]
+# the statically linked XDK libraries: D3D, D3DX, XGRPH, DSOUND, XPP (between .text and .rdata), DOLBY (after .data),
+# and XAPI inside .text
+XDK_RANGES = [(0x217200, 0x292980), (0x326020, 0x32D1A0),
+              (0x1256F0, 0x12F600), (0x1EBD00, 0x1EDA20), (0x1F9DA0, 0x1F9DB3)]
 FLOAT_TYPES = {"float", "double", "float10"}
 
 
@@ -25,14 +30,26 @@ def is_xdk_address(name):
     if not m:
         return False
     a = int(m.group(1), 16)
-    return a >= XDK_START or any(lo <= a < hi for lo, hi in XAPI_RANGES)
+    return any(lo <= a < hi for lo, hi in XDK_RANGES)
 
 
 def main():
-    decomp = sys.argv[1]
+    decomp, llvm_bin = sys.argv[1], sys.argv[2]
     build = os.path.join(decomp, "build")
-    report = open(os.path.join(build, "data", "data_report.txt"), encoding="latin-1").read().splitlines()
-    still = [l.strip() for l in report if re.match(r"^  \S+$", l)]
+    # what the game objects need and don't define themselves (the port's own objects and the data object are left
+    # out, so the list doesn't depend on whether stubs or implementations already exist)
+    defined, needed = set(), set()
+    for obj in glob.glob(os.path.join(build, "obj", "*.obj")):
+        if os.path.basename(obj).startswith(("port_", "xbe_data")):
+            continue
+        out = subprocess.run([os.path.join(llvm_bin, "llvm-nm.exe"), "--format=posix", obj],
+                             capture_output=True, text=True, encoding="latin-1").stdout
+        for line in out.splitlines():
+            parts = line.split()
+            if len(parts) >= 2:
+                name = re.sub(r"@\d+$", "", parts[0][1:] if parts[0][:1] in "_@" else parts[0])
+                (needed if parts[1] == "U" else defined).add(name)
+    still = sorted(needed - defined)
     program = open(os.path.join(build, "program.h"), encoding="latin-1").read()
     protos = {}
     for line in program.splitlines():

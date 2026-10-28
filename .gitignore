@@ -23,6 +23,7 @@
 !/decomp/port/platform.c
 !/decomp/port/cxx_runtime.c
 !/decomp/port/xapi.c
+!/decomp/port/crt_math.c
 !/decomp/port/win32_min.h
 
 !/analysis/
@@ -33,3 +34,4 @@
 !/analysis/function_names.tsv
 !/analysis/slot_names.tsv
 !/analysis/field_names.tsv
+!/analysis/crt_signatures.tsv

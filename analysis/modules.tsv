@@ -1,8 +1,8 @@
 start	end	module	evidence
 001256f0	0012f600	xapi	Xbox XAPI/kernel wrappers named by Ghidra's Xbox symbol database (XPhysicalAlloc ... XGetDisplayBlocks)
 001b2790	001c8200	lua	Lua 5.0 ("$Lua: Lua 5.0 Copyright (C) 1994-2003 Tecgraf, PUC-Rio $"); calls only itself + CRT, game calls in
-001c8200	001dd3a0	engine_core	developer's core library ("elem"/"bent": memdebug.h, circular.h, crash log, disk, basic_string), called by game and Lua
-001dd3a0	001ebd00	crt	MSVC 7.1 LIBCMT + C++ EH runtime (named by Function ID: _memmove, __CxxFrameHandler, _qsort, ...)
+001c8200	001dd600	engine_core	developer's core library ("elem"/"bent": memdebug.h, circular.h, crash log, disk, basic_string), called by game and Lua; ends with an R250 random generator (0x1dd3b0-0x1dd490) and allocator helpers
+001dd600	001ebd00	crt	MSVC 7.1 LIBCMT + C++ EH runtime, starting at _memmove (named by Function ID: _memmove, __CxxFrameHandler, _qsort, ...)
 001ebd00	001eda20	xapi	Xbox XAPI (XCreateSaveGame ... CancelIo)
 001f9da0	001f9db3	xapi	called only from XAPI
 00215890	00217200	static_init	compiler-generated global constructors/destructors for game objects (no direct callers)

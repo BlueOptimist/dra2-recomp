@@ -1,0 +1,25 @@
+address	signature	storage	evidence
+001dec20	char * __cdecl strstr(char *string, char *find);		word-at-a-time substring search; the game looks for "radialknockback"
+001df260	char * __cdecl strchr(char *string, int c);		word-at-a-time character search, returns NULL at the terminator
+001de64f	int __cdecl tolower(int c);		ctype table bit 1 (upper) -> c + 0x20
+001e26d3	int __cdecl toupper(int c);		ctype table bit 2 (lower) -> c - 0x20
+001df09d	int __cdecl _finite(double x);		exponent bits != 0x7ff
+001df1b9	double __cdecl atof(char *string);		skips ctype-space (bit 8), parses, returns on the x87 stack
+001e05ed	void __cdecl free(void *memory);		NULL check, then HeapFree on the CRT heap
+001e7c93	char * __cdecl _strdup(char *string);		strlen + malloc + copy
+001df90e	void __cdecl _cexit(void);		doexit(quick=0, retcaller=0): runs atexit handlers, returns
+001ddfd6	void __stdcall CRT_CxxThrowException(void *object, void *throw_info);		copies the exception template and calls RaiseException
+001de157	void __fastcall CRT_exception_ctor(void *self);		exception::exception(): vftable 0x2afeb0, no message
+001de1ad	void * __thiscall CRT_exception_copy(void *source);		exception::exception(const exception &): strdup's an owned message
+001dda70	longlong __cdecl CRT_ftol(float10 value);	params=ST0;return=EDX:EAX	_ftol: x87 value -> 64-bit integer, truncated toward zero
+001de08c	float10 __cdecl CRT_CIacos(float10 x);	params=ST0;return=ST0	_CIacos: fpatan(sqrt(1-x*x), x) with the operands swapped (fxch before fpatan)
+001e01c8	float10 __cdecl CRT_CIasin(float10 x);	params=ST0;return=ST0	_CIasin: fpatan(x, sqrt(1-x*x))
+001decb2	float10 __cdecl CRT_CIatan2(float10 y, float10 x);	params=ST1,ST0;return=ST0	_CIatan2 through the two-argument intrinsic dispatcher; UpdateFacing wraps its result by +-pi
+001df946	float10 __cdecl CRT_CIpow(float10 x, float10 y);	params=ST1,ST0;return=ST0	_CIpow: fyl2x-based, x in ST1 and y in ST0
+001eb830	int __stdcall XAPI_CreateDirectoryA(char *path, void *security);		NtCreateFile with FILE_DIRECTORY_FILE and FILE_CREATE
+001e00d1	int __cdecl __stricmp(char *a, char *b);		LIBCMT _stricmp (was given __stdcall)
+001e0030	int __cdecl __strnicmp(char *a, char *b, size_t count);		LIBCMT _strnicmp (was given __stdcall)
+001de033	int __cdecl __vsnprintf(char *buffer, size_t count, char *format, void *args);		LIBCMT _vsnprintf (was given __stdcall)
+001df80a	unsigned int __cdecl __controlfp(unsigned int value, unsigned int mask);		LIBCMT _controlfp (was given __stdcall)
+001dd93d	double __cdecl __ceil_default(double x);		LIBCMT ceil (was given __stdcall)
+001dfb55	double __cdecl __floor_default(double x);		LIBCMT floor (was given __stdcall)

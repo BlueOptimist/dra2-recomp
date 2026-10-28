@@ -89,6 +89,7 @@ typedef unsigned short word;
 #define __ceil_default ceil
 #define __floor_default floor
 #define FID_conflict__fread fread
+#define _malloc malloc
 
 /* Ghidra's floating-point pseudo-operations (x87 instructions it has no C operator for) */
 #define ABS(x) __builtin_fabs((double)(x))
