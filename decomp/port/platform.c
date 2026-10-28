@@ -14,6 +14,26 @@ void port_kernel_unimplemented(const char *name)
     abort();
 }
 
+/* 0x1d4ba0, the body of FatalErrorf (format, va_list): the engine's fatal-error report. The Xbox version formats the
+ * message, calls an optional hook, appends it to t:\crashlog.txt and breaks into the debugger. Its decompiled body
+ * doesn't compile yet (the hook is an untyped global), so this replaces the weak trap stub. */
+int vprintf(const char *format, char *args);
+
+void FUN_001d4ba0(char *format, char *args)
+{
+    printf("[game] FATAL ERROR: ");
+    vprintf(format, args);
+    printf("\n");
+    abort();
+}
+
+/* A code label the game uses as a callback, with no recompiled function at that address (tools/gen_data.py). */
+void port_unrecompiled_code(const char *name)
+{
+    printf("[port] reached code that isn't recompiled yet: %s\n", name);
+    abort();
+}
+
 /* Report an Xbox system call that has no Windows implementation yet: once per function, so the log shows exactly
  * which parts of the platform layer a run actually needs. */
 void port_todo(const char *name)

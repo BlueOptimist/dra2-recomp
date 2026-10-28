@@ -260,7 +260,36 @@ The port's `main` does the part the Windows CRT doesn't:
 **Lua.** `third_party/lua-5.0.3` is the stock Lua 5.0.3 (MIT licence; `src/`, `include/`, `COPYRIGHT` and `README` only). It's the last bug-fix release of 5.0, with the same API as the game's copy. The SHA-256 of `lua-5.0.3.tar.gz` matched the one listed on lua.org.
 `build_objects.py` compiles it (27 files, without `ltests.c`) with the game's number type: `-DLUA_NUMBER=float -DLUA_NUMBER_SCAN="%f" -DLUA_NUMBER_FMT="%.7g"`. That resolves all 45 Lua symbols, with no clashes. CI builds the same configuration as `lua50_float.lib`.
 
-**Link status: 236 undefined symbols.**
+### It links: `build/dra2.exe`
+
+`tools/build_all.ps1` runs the whole chain: export, compile check, objects, stubs, data, link and a 30-second smoke run.
+The result is a 4.4 MB `dra2.exe` from 117 objects: the game, the generated data, the port layer and Lua 5.0.3. **No undefined symbols remain.**
+
+The last 236 symbols went like this. Except where noted, the fixes are in `compile_check.py`'s preprocessing, so the exported source stays as Ghidra wrote it.
+- **`stack0x…` (161).** These are stack slots relative to the entry stack pointer.
+  - Positive offsets are the incoming arguments, addressed from the first stack parameter (`((undefined1 *)&param_1)[N - 4]`).
+  - Negative offsets are local buffers Ghidra never made into variables; they become a per-function `ghidra_frame[]`.
+- **Split variables (13).** `_param_N`, `_local_X` and `_xStack_X` are accessed through the base variable's address.
+- **`register0x00000010` (ESP).** It becomes the frame address.
+- **Bare method names (14).** A call to the caller's own class, e.g. `vf01(this, …)` inside `SystemMessage::ctor`, is qualified with that class, or with a class named on the same line.
+- **Leftover labels** (handled in `gen_data.py`):
+  - `XBE_FILE_HEADER_00010000` and constants inside `.text` get the original bytes;
+  - null-pointer offsets (`DAT_00000014`, `iRam0000000c`) and flash-ROM reads (`0xff8xxxxx`) get zeroed storage;
+  - `LAB_` labels inside `.rdata` are data labels;
+  - a code label with no function behind it gets a reporting stub.
+- `___CxxFrameHandler` gets a stand-in.
+
+**Getting it to run: first fixes.** The smoke run exposed three bugs where the recompiled code didn't behave like the original:
+1. **Fatal errors were invisible.** `FatalErrorf`'s body (`0x1d4ba0`) was one of the trap-stubbed functions. Trap stubs are now **weak**, so `port/` can replace any function that doesn't compile yet. `port/platform.c` prints the message and aborts.
+2. **Lost return values (`SetLostReturns.java`).** 421 callees were typed `void` while their callers used EAX after the call (`extraout_EAX`, 3,816 uses). Recompiled, those are uninitialised locals; the engine allocator "failed" with *Out of memory -- allocation of 20 bytes*. `analysis/lost_returns.tsv` lists them, and the script gave 395 of them a return value (`undefined4`, or `float10` for 9 in `ST0`). Backup: `ghidra/backup_before_returns/`.
+3. **Addresses written as integers.** 1,260 constants inside `.rdata`/`.data` were left as plain numbers by the decompiler (e.g. `FUN_00034660(0x2f42d0)`, or the bounds of a prime table handed to a `lower_bound`). They now become `((int)&DAT_<address>)`, which points into the regenerated data. Also, `&DAT_00000014` (a small constant shown as a label address) becomes `(undefined1 *)0x14`.
+
+**Where it stands.** 260 of the 3,534 static initializers run. Then `FUN_00143670` reads uninitialised heap memory: under the debugger, `0xbaadf01d` is Windows' debug-heap fill plus 0x10. Diagnosing is quick:
+- `DRA2_TRACE_INIT=1` prints each initializer before it runs;
+- `lldb -b -o run -- dra2.exe` (it ships with llvm-mingw) gives the faulting address;
+- `llvm-nm -n dra2.exe` maps that address to a function.
+
+**Link status before these steps: 236 undefined symbols.**
 - **First link: 281.** The CRT, compiler helpers and Win32 imports resolved.
 - **Lua 5.0.3 then removed 45.**
 

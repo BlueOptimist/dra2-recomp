@@ -76,6 +76,14 @@ void __stdcall CRT_CxxThrowException(void **object, void *throw_info)
     abort();
 }
 
+/* __CxxFrameHandler: one game-side SEH handler (text_001a74c0) forwards to it. With no exception frames nothing
+ * reaches it; if something does, keep searching (ExceptionContinueSearch). */
+int __stdcall ___CxxFrameHandler(void *record, void *frame, void *context, void *dispatcher)
+{
+    (void)record, (void)frame, (void)context, (void)dispatcher;
+    return 1;
+}
+
 /* exception::~exception(): { vftable, what, owns_what } -- frees the message it owns */
 void __fastcall __1exception__UAE_XZ(void **self)
 {

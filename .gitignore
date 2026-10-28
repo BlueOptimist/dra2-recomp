@@ -41,3 +41,4 @@
 !/analysis/crt_signatures.tsv
 !/analysis/lua_signatures.tsv
 !/analysis/startup_signatures.tsv
+!/analysis/lost_returns.tsv

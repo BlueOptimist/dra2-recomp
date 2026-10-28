@@ -122,18 +122,30 @@ def main():
     # where each needed symbol lives
     labels = collections.defaultdict(list)  # address -> [decorated names]
     not_here = collections.Counter()
+    image_copy = {}   # decorated name -> address: data inside the XBE image outside .rdata/.data (header, .text)
+    zero_fill = []    # decorated names of decompiler artefacts at tiny addresses (null-pointer offsets)
+    code_stubs = []   # decorated names of code labels with no recompiled function behind them
+    text_va, text_size, _ = secs[".text"]
     for raw in sorted(undefined):
         c = undecorate(raw)
         addr = None
-        m = re.search(r"_([0-9a-f]{8})$", c)
+        m = re.search(r"_?([0-9a-f]{8})$", c)
         if c.endswith("_vftable_data"):
             addr = label_addr.get(c[:-len("_data")])
-        elif m and re.match(r"_?(?:DAT|PTR|s|u|UNK|BYTE|WORD|DWORD|FLOAT|DOUBLE)_", c):
+        elif m and re.match(r"_?(?:DAT|PTR|s|u|UNK|BYTE|WORD|DWORD|FLOAT|DOUBLE|LAB|XBE_\w+)_", c):
+            addr = int(m.group(1), 16)
+        elif m and re.match(r"[a-z]{1,4}Ram[0-9a-f]{8}$", c):
             addr = int(m.group(1), 16)
         elif c.startswith("luakey_"):
             addr = label_addr.get(c)
         if addr is not None and section_of(addr):
             labels[addr].append(raw)
+        elif addr is not None and (addr < 0x10000 or addr >= 0xF0000000):
+            zero_fill.append(raw)  # null-pointer offsets, and Xbox flash/hardware addresses (0xff8xxxxx: the ROM)
+        elif addr is not None and c.startswith("LAB_") and text_va <= addr < text_va + text_size:
+            code_stubs.append(raw)
+        elif addr is not None and (0x10000 <= addr < 0x11000 or text_va <= addr < text_va + text_size):
+            image_copy[raw] = addr
         else:
             not_here[re.sub(r"_[0-9a-f]{8}$|^_+", "", c).split("_")[0] or c] += 1
 
@@ -241,6 +253,36 @@ def main():
     for name in kernel_table.values():
         asm += [f"Lkernel_{name}:", f"\tpushl $Lkname_{name}", "\tcalll _port_kernel_unimplemented",
                 f"Lkname_{name}:", f'\t.asciz "{name}"']
+
+    # code labels the game takes the address of, with no recompiled function at that address: report and stop
+    for raw in code_stubs:
+        asm += [f"\t.globl {raw}", f"{raw}:", f"\tpushl $Lcname_{raw}", "\tcalll _port_unrecompiled_code",
+                f"Lcname_{raw}:", f'\t.asciz "{undecorate(raw)}"']
+    stats["code labels routed to reporting stubs"] = len(code_stubs)
+
+    # data the game reads from elsewhere in the XBE image: the header (0x10000, the game reads e.g. its
+    # certificate) and constants stored inside .text. The original bytes, 256 per label (the whole header).
+    xbe_bytes = open(xbe, "rb").read()
+    header_size, = struct.unpack_from("<I", xbe_bytes, 0x108)
+    asm.append('\t.section .data$xbe_image,"dw"')
+    for raw, addr in sorted(image_copy.items(), key=lambda kv: kv[1]):
+        if addr < 0x11000:
+            start, size = addr - 0x10000, (header_size - (addr - 0x10000)) if addr - 0x10000 < header_size else 256
+            blob = xbe_bytes[start:start + size]
+        else:
+            off = addr - text_va
+            blob = secs[".text"][2][off:off + 256]
+        asm += [f"\t.globl {raw}", f"{raw}:"]
+        for k in range(0, len(blob), 32):
+            asm.append("\t.byte " + ",".join(str(b) for b in blob[k:k + 32]))
+    stats["labels copied from the XBE image (header, .text constants)"] = len(image_copy)
+
+    # decompiler artefacts at absolute addresses outside the image (null-pointer + offset, flash ROM reads):
+    # zeroed storage, so they link
+    asm.append('\t.section .bss$xbe_null,"bw"')
+    for raw in zero_fill:
+        asm += [f"\t.globl {raw}", f"{raw}:", "\t.zero 64"]
+    stats["null-offset artefacts given zeroed storage"] = len(zero_fill)
 
     s_path = os.path.join(out_dir, "xbe_data.s")
     with open(s_path, "w", encoding="latin-1") as f:

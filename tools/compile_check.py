@@ -387,7 +387,160 @@ def dedupe_definitions(pp_files):
     return renamed
 
 
-def preprocess(src, dst):
+IMAGE_CONSTANT = re.compile(r"(?<![\w&])0x(00)?(29[2-9a-f][0-9a-f]{3}|2[a-f][0-9a-f]{4}|3[0-2][0-9a-f]{4})\b")
+DATA_RANGES = ((0x292980, 0x2BF854), (0x2BF860, 0x326004))  # .rdata, .data (with its zero-filled tail)
+
+
+def image_constant(m):
+    value = int(m.group(2), 16)
+    if any(lo <= value < hi for lo, hi in DATA_RANGES):
+        return f"((int)&DAT_{value:08x})"
+    return m.group(0)
+
+
+STACK_REF = re.compile(r"\bstack0x([0-9a-f]{8})\b")
+SPLIT_REF = re.compile(r"\b_((param_\d+)|(local_[0-9a-f]+)|([a-zA-Z]{1,4}Stack_[0-9a-f]+))\b")
+REGISTER_ESP = "register0x00000010"
+
+
+def split_params(sig):
+    """[(type, name)] of a function signature's parameter list ('void' -> [])."""
+    open_ = sig.find("(")
+    close = sig.rfind(")")
+    body = sig[open_ + 1:close] if open_ >= 0 and close > open_ else ""
+    if body.strip() in ("", "void"):
+        return []
+    parts, depth, cur = [], 0, ""
+    for ch in body:
+        if ch == "," and depth == 0:
+            parts.append(cur)
+            cur = ""
+            continue
+        depth += ch == "("
+        depth -= ch == ")"
+        cur += ch
+    parts.append(cur)
+    out = []
+    for p in parts:
+        m = re.search(r"([A-Za-z_]\w*)\s*(?:\[[^\]]*\])?\s*$", p.strip())
+        if m:
+            out.append((p.strip()[:m.start(1)].strip(), m.group(1)))
+    return out
+
+
+def fix_pseudo_storage(lines, class_methods):
+    """Give Ghidra's pseudo-variables real storage, function by function:
+    - stack0xNNNNNNNN (a stack slot relative to the stack pointer at entry): positive offsets are the incoming
+      arguments, addressed from the first stack parameter; negative ones are local buffers Ghidra never made into
+      variables, which become a per-function byte array ghidra_frame
+    - _param_N / _local_X / _xStack_X (a wider view of the same slot): an access through that variable's address
+    - register0x00000010 (ESP): the frame address
+    - a method of the function's own class called without its class prefix (vf01(this, ...)): qualified
+    Everything stays C; the semantics match the original stack layout as far as clang's frame allows."""
+    out = []
+    i = 0
+    while i < len(lines):
+        m = FUNC_HEADER.match(lines[i].rstrip("\n"))
+        if not m:
+            out.append(lines[i])
+            i += 1
+            continue
+        # header, signature up to the opening brace, body up to the closing brace (both at column 0)
+        j = i + 1
+        while j < len(lines) and lines[j].rstrip("\n") != "{":
+            j += 1
+        k = j + 1
+        while k < len(lines) and lines[k].rstrip("\n") != "}":
+            k += 1
+        if j >= len(lines) or k >= len(lines):
+            out.extend(lines[i:])
+            break
+        sig_lines, body = lines[i:j + 1], lines[j + 1:k]
+        sig = " ".join(l.strip() for l in sig_lines[1:-1] if not l.strip().startswith(("/*", "*", "//")))
+        params = split_params(sig)
+        names = [n for _, n in params]
+        conv_regs = 1 if "__thiscall" in sig else 2 if "__fastcall" in sig else 0
+        stack_params = names[conv_regs:]
+        text = "".join(body)
+        decls = []
+
+        # stack0x...
+        offsets = sorted({int(s, 16) for s in STACK_REF.findall(text)})
+        negative = [0x100000000 - o for o in offsets if o >= 0x80000000]
+        frame = (max(negative) + 16) if negative else 0
+        if frame:
+            decls.append(f"  undefined1 ghidra_frame[{frame:#x}]; /* stack slots below the entry stack pointer */\n")
+        first = stack_params[0] if stack_params else None
+        if offsets and any(o < 0x80000000 for o in offsets) and not first:
+            decls.append("  undefined1 ghidra_args[0x1000]; /* no stack parameters: stand-in argument area */\n")
+
+        def stack_slot(mm):
+            o = int(mm.group(1), 16)
+            if o >= 0x80000000:
+                return f"ghidra_frame[{frame - (0x100000000 - o):#x}]"
+            if first:
+                return f"((undefined1 *)&{first})[{o - 4}]"
+            return f"ghidra_args[{o:#x}]"
+
+        # _param_N, _local_X, _xStack_X
+        split = {}
+        for mm in SPLIT_REF.finditer(text):
+            name = mm.group(1)
+            if name in split:
+                continue
+            ptr = re.search(rf"\*\s*\(?\s*_{name}\b|\b_{name}\s*(?:\[|->)", text) is not None
+            t = "undefined4 *" if ptr else "undefined4"
+            base_declared = re.search(rf"\b{re.escape(name)}\s*(?:\[[^\]]*\])?\s*;", text) or name in names
+            if base_declared:
+                split[name] = f"(*({t} *)&{name})"
+            elif name.startswith("param_") and first:
+                n = int(name.split("_")[1])
+                split[name] = f"(*({t} *)((undefined1 *)&{first} + {4 * (n - 1)}))"
+            else:
+                decls.append(f"  {t} _{name}; /* split variable with no base */\n")
+
+        def split_ref(mm):
+            return split.get(mm.group(1), mm.group(0))
+
+        if REGISTER_ESP in text:
+            decls.append(f"  undefined1 *{REGISTER_ESP} = (undefined1 *)__builtin_frame_address(0);\n")
+
+        # bare method names of the function's own class (or of a class named on the same line)
+        # by now Class::method is spelled Class__method; the class is the part before the last "__"
+        qual = m.group(2).replace("::", "__")
+        cls = qual.rsplit("__", 1)[0] if "__" in qual.lstrip("_") else None
+        if cls not in class_methods:
+            cls = None
+
+        def qualify(line):
+            classes = [c for c in re.findall(r"\b([A-Za-z_]\w*?)__\w+", line) if c in class_methods]
+            if cls:
+                classes.append(cls)
+            for c in classes:
+                for meth in class_methods.get(c, ()):
+                    if meth in names or meth == c:
+                        continue
+                    line = re.sub(rf"(?<![\w.>&:]){re.escape(meth)}\b(?=\s*[(,)])(?!\s*=)",
+                                  f"{c}__{meth}", line)
+                    line = re.sub(rf"&{re.escape(meth)}\b", f"&{c}__{meth}", line)
+            return line
+
+        new_body = []
+        for line in body:
+            line = STACK_REF.sub(stack_slot, line)
+            line = SPLIT_REF.sub(split_ref, line)
+            if cls or "__" in line:
+                line = qualify(line)
+            new_body.append(line)
+        out.extend(sig_lines)
+        out.extend(decls)
+        out.extend(new_body)
+        out.append(lines[k])
+        i = k + 1
+    return out
+
+
+def preprocess(src, dst, class_methods=None):
     out = []
     for line in open(src, encoding="latin-1"):
         if line.startswith("#include"):
@@ -406,6 +559,14 @@ def preprocess(src, dst):
         if not re.match(r"^\s*[A-Za-z_][\w ]*\*+\s*unaff_FS_OFFSET;", line):  # leave the declaration alone
             line = re.sub(r"\*unaff_FS_OFFSET\b", "0", line)
         line = re.sub(r"&(?:PTR_)?LAB_(?:001e[ef]|001f[0-9])[0-9a-f]{3}\b", "(void *)0", line)
+        # "&DAT_00000014" is the decompiler showing a small integer constant (0x14) as the address of a label; outside
+        # the image there is no such label, so it is the constant itself
+        line = re.sub(r"&_*(?:DAT|UNK|PTR)_(0000[0-9a-f]{4})\b", r"((undefined1 *)0x\1)", line)
+        # An integer constant inside .rdata/.data is an address the decompiler didn't turn into a label (array bounds,
+        # objects passed by address, ...). Those sections are regenerated elsewhere in the port's image, so it becomes
+        # the address of a label there (tools/gen_data.py defines DAT_<address>). Case labels must stay constants.
+        if not re.match(r"\s*case\b", line):
+            line = IMAGE_CONSTANT.sub(image_constant, line)
         # "(X_fn)0x0" is a null function pointer; plain 0 compares with anything it is used against
         line = re.sub(r"\(\w+_fn\s*\*?\)\s*0x0\b", "0", line)
         line = CASE_DENORMAL.sub(lambda m: f"case {round(float(m.group(1)) / 2.0 ** -149)}:", line)
@@ -413,6 +574,8 @@ def preprocess(src, dst):
                                      f"((char *)&{m.group(1)} + {m.group(2)}))", line)
         out.append(VTABLE_REF.sub(r"&\1_data", QUALIFIED.sub(r"\1__\2", line)))
     out = fix_float_pointer_casts(out)
+    if class_methods is not None:
+        out = fix_pseudo_storage(out, class_methods)
     text = "".join(out)
     vtables = set(re.findall(r"&(\w+_vftable)_data\b", text))
     os.makedirs(os.path.dirname(dst), exist_ok=True)
@@ -469,9 +632,14 @@ def main():
     vtables_used = set()
     pp_files = []
     shutil.rmtree(os.path.join(build, "pp"), ignore_errors=True)  # no files left over from an older export
+    # every class's methods (for qualifying calls Ghidra printed without the class)
+    class_methods = collections.defaultdict(set)
+    for s in sources:
+        for m in re.finditer(r"(?m)^// [0-9a-f]{8} ([A-Za-z_]\w*)::(~?\w+) \(", open(s, encoding="latin-1").read()):
+            class_methods[m.group(1)].add(m.group(2))
     for s in sources:
         dst = os.path.join(build, "pp", os.path.relpath(s, os.path.join(decomp, "src")))
-        g, v = preprocess(s, dst)
+        g, v = preprocess(s, dst, class_methods)
         globals_used |= g
         vtables_used |= v
         pp_files.append(dst)

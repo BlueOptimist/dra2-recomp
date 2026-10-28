@@ -39,9 +39,17 @@ def stub_functions(text, broken):
     while i < len(lines):
         m = FUNC_HEADER.match(lines[i])
         if m and m.group(1) in broken:
-            # signature lines up to the opening brace at column 0, then skip to the closing brace at column 0
+            # signature lines up to the opening brace at column 0, then skip to the closing brace at column 0.
+            # The stub is weak: a hand-written replacement in decomp/port/ takes over at link time.
+            out.append(lines[i])
+            i += 1
+            first_sig = True
             while i < len(lines) and lines[i] != "{":
-                out.append(lines[i])
+                line = lines[i]
+                if first_sig and line.strip() and not line.strip().startswith(("/*", "*", "//")):
+                    line = "__attribute__((weak)) " + line
+                    first_sig = False
+                out.append(line)
                 i += 1
             out.append("{")
             out.append(f"  __builtin_trap(); /* {m.group(1)}: decompiled body does not compile yet */")

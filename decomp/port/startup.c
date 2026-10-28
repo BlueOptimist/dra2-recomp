@@ -10,6 +10,10 @@
  * recompiled code; the XDK ones keep their Xbox address and are skipped here.
  */
 int printf(const char *format, ...);
+typedef struct _iobuf FILE;
+FILE *__acrt_iob_func(unsigned index);
+int setvbuf(FILE *stream, char *buffer, int mode, unsigned size);
+char *getenv(const char *name);
 
 typedef void (*initializer)(void);
 extern initializer DAT_002bf870[];  /* first entry of the C++ initializer table */
@@ -24,6 +28,9 @@ static int is_xbox_address(unsigned address) { return address >= 0x10000 && addr
 int main(int argc, char **argv)
 {
     int ran = 0, skipped = 0;
+    /* unbuffered, so the log survives a crash; DRA2_TRACE_INIT=1 prints each initializer before calling it */
+    setvbuf(__acrt_iob_func(1), 0, 4 /* _IONBF */, 0);
+    int trace = getenv("DRA2_TRACE_INIT") != 0;
     (void)argc, (void)argv;
     for (initializer *entry = DAT_002bf870; entry < DAT_002c2fd0; entry++) {
         unsigned address = (unsigned)*entry;
@@ -33,9 +40,13 @@ int main(int argc, char **argv)
             skipped++;
             continue;
         }
+        if (trace)
+            printf("[port] init %d: table slot %#x -> %p\n", ran, 0x2bf870 + 4 * (unsigned)(entry - DAT_002bf870),
+                   (void *)*entry);
         (*entry)();
         ran++;
     }
     printf("[port] static initializers: %d run, %d Xbox-library entries skipped\n", ran, skipped);
+    printf("[port] calling game_main\n");
     return game_main(0, 0, 0);
 }
