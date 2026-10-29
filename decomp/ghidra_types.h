@@ -49,6 +49,9 @@ typedef unsigned short word;
 #define CONCAT11(a, b) ((unsigned short)(((unsigned short)(unsigned char)(a) << 8) | (unsigned char)(b)))
 #define CONCAT12(a, b) ((unsigned int)(((unsigned int)(unsigned char)(a) << 16) | (unsigned short)(b)))
 #define CONCAT13(a, b) ((unsigned int)(((unsigned int)(unsigned char)(a) << 24) | ((unsigned int)(b) & 0xFFFFFF)))
+/* wider than 32 bits: a byte or a short above a dword */
+#define CONCAT14(a, b) ((unsigned long long)(((unsigned long long)(unsigned char)(a) << 32) | (unsigned int)(b)))
+#define CONCAT24(a, b) ((unsigned long long)(((unsigned long long)(unsigned short)(a) << 32) | (unsigned int)(b)))
 #define CONCAT22(a, b) ((unsigned int)(((unsigned int)(unsigned short)(a) << 16) | (unsigned short)(b)))
 #define CONCAT31(a, b) ((unsigned int)(((unsigned int)(a) << 8) | (unsigned char)(b)))
 #define CONCAT44(a, b) ((unsigned long long)(((unsigned long long)(unsigned int)(a) << 32) | (unsigned int)(b)))

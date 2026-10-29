@@ -30,6 +30,7 @@
 !/decomp/port/startup.c
 !/decomp/port/crash.c
 !/decomp/port/d3d8.c
+!/decomp/port/calls.c
 !/decomp/port/win32_min.h
 
 !/analysis/
@@ -46,3 +47,4 @@
 !/analysis/lost_returns.tsv
 !/analysis/ecx_this.tsv
 !/analysis/register_params.tsv
+!/analysis/varargs.tsv

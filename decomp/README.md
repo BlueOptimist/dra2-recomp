@@ -313,6 +313,37 @@ Ghidra backups were made before each change: `ghidra/backup_before_thiscall/` an
 
 It then writes through the null device and surface objects those returned (in `Class_2ae980::ctor`). `D3D_AllocContiguousMemory` is implemented (`port/d3d8.c`). **From here on, startup needs the Direct3D layer itself.**
 
+### Direct3D layer, first part, and the boot sequence
+
+`port/d3d8.c` keeps the XDK's resource headers (Common, Data, Lock, Format, Size, Parent) and works on the game's own framebuffer memory:
+- surfaces: `XGSetSurfaceHeader`, `D3DResource_Register`, `D3DResource_Release`, `D3D_AllocContiguousMemory`;
+- the device: `Direct3D_CreateDevice` (opens a 2× window), `GetBackBuffer2`, `GetRenderTarget2`, `GetDepthStencilSurface2`, `SetRenderTarget`, `Get`/`SetGammaRamp`, `SetTile`;
+- `Clear` (CPU fill of the render target) and `Swap` (GDI `StretchDIBits` of the back buffer, then window messages).
+
+Drawing (push buffers, shaders, textures) is the next part. With the device in place, the game runs its main loop and boot state machine. Getting there took these fixes, each again program-wide:
+
+| problem | effect | fix |
+|---|---|---|
+| A bare method name resolved against another class named on the same line (`ctor` next to `Class_2ae928::dtor`) | The scheduler's bucket array was built with the base constructor, so its lists weren't self-linked | The function's own class is tried first (Ghidra leaves a name bare only for that class) |
+| Integer and pointer casts of float storage (`(int)fVar1 + 0x54`) | C converts the value: a pointer read through a float-typed field became 0 | `float_bits`: such casts are bit copies (the game converts floats to integers only through `__ftol`/`ROUND`); `f = (float)(bits \| 0x1000)` likewise |
+| **~1,600 virtual calls on objects of unknown type** (`(**(code **)(*p + 4))()`) | MSVC passes `this` in ECX and Ghidra doesn't show it, so every such call ran with a garbage `this` | `vcall_this`: each becomes a `__thiscall` call with the object as `this`, read once |
+| A label used as `G->field` but typed by casts as `int *` | Didn't compile (a trap stub ran) | Those uses get the structure pointer type it's assigned: `((T *)G)->field` |
+| **Labels holding 8-byte values declared 4 bytes** (594: a 64-bit performance counter, and pairs of 4-byte stores Ghidra merged into one 64-bit constant) | The start time lost its high half: the game thought days had passed | Labels assigned an 8-byte local, an 8-byte result or a >32-bit constant are declared `undefined8` (or the double/longlong type) |
+| List heads declared byte pointers (`undefined1 *`) | `*head != head` compared one byte with a pointer: the load queue never looked empty | Assignments to typed locals (`piVar3 = G;`) count as type votes. Where a function treats a pointer label as an integer, its `G + 4` becomes `(int)G + 4` (Ghidra types an untyped label per function) |
+| **28 printf-style wrappers not marked variadic** | `sprintf(buf, "menus/menu_%s_%s.res")` lost its arguments at 387 call sites | `tools/find_varargs.py` (a function passing `&stack0x(4 + 4·named)` on) → `analysis/varargs.tsv` → `SetVarargs.java`, then re-export |
+| Structures passed by value (a 260-byte name as 65 `in_stack_ffff…` arguments) | The caller filled `stack0xfffffed8` but passed separate, uninitialised `in_stack_fffffed8…` locals | `in_stack_ffffXXXX` is the same `ghidra_frame` slot as `stack0xffffXXXX` |
+| `register0x00000010` (ESP at entry) was the frame address | Copies of by-value arguments (`*(esp + 4)`…) started 4 bytes early: the return address, then the name minus its last word | It is the frame address + 4 (above the saved EBP) |
+| The streaming reader opens files `FILE_FLAG_NO_BUFFERING` | Windows unbuffered I/O needs sector (up to 4 KB) alignment, stricter than the DVD's 2 KB | `CreateFile` drops the flag (overlapped stays); failed opens and reads are logged |
+| `XInputGetState` on empty slots every tick | Slow main loop | Pad presence is re-polled at most twice a second |
+
+**Where it stands now.** The boot runs its main loop and its state machine. It loads `levels/menu_black.res`, `lua.res` and the menu resources (`menus/menu_…_eng.res`), and builds the menu background level and its screen. It then crashes in the next object it sets up, `FUN_00146c60` (a null pointer at +0x28, reached from `FUN_00178e90`). Nothing has been drawn yet: the draw call returns before `Swap` until a screen exists. The present parameters `CreateDevice` receives also still read 0×0 with a 4096×4096 surface, which needs checking.
+
+**Debugging tools added.**
+- `DRA2_SAMPLE=<seconds>` or `<n>ms` (`port/crash.c`) stops the game's thread periodically and prints its call chain. The chain is copied while the thread is stopped and printed after it resumes, since it may hold the stdout lock.
+- `DRA2_WATCH=addr[:off[:off…]]` prints dwords with each sample. Each `:off` follows a pointer.
+- `tools/run_game.ps1 [-Seconds] [-Sample] [-Watch DAT_x:8,…]` runs the build, resolves label names to the current build's addresses and symbolizes everything.
+- `build_all.ps1 -Instrument` compiles the game with `-finstrument-functions`. `port/calls.c` counts calls, and each sample lists the functions that ran since the last one, most called first (`DRA2_CALLS=<n>` sets how many). This is how the boot state machine was followed branch by branch.
+
 **Link status before these steps: 236 undefined symbols.**
 - **First link: 281.** The CRT, compiler helpers and Win32 imports resolved.
 - **Lua 5.0.3 then removed 45.**

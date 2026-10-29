@@ -63,6 +63,7 @@ PARTIAL_TYPES = {"1": "unsigned char", "2": "unsigned short", "3": "unsigned int
                  "8": "unsigned long long"}
 # A global is declared as a pointer when the code dereferences, subscripts or member-accesses it.
 _G = r"((?:_?DAT|PTR)_\w+|_param_\d+|_local_[0-9a-f]+|_[a-zA-Z]{1,4}Stack_[0-9a-f]+)"
+WIDE_TYPES = r"undefined8|longlong|ulonglong|double|float8"
 GLOBAL_POINTER_USE = re.compile(rf"\*\s*\(?\s*{_G}\b|\b{_G}\s*\[|\b{_G}\s*->")
 # Ghidra writes a 10-byte x87 return value as an array type ("undefined1 [10] f(...)"); C can't return arrays.
 ARRAY10_RETURN = re.compile(r"^(\s*)undefined1\s+\[10\]\s+")
@@ -431,13 +432,133 @@ def split_params(sig):
     return out
 
 
+INT_CAST = re.compile(r"\((int|uint|undefined4|undefined2|undefined1|short|ushort|char|byte|bool|"
+                      r"[A-Za-z_]\w*\s*\*+)\s*\)\s*")
+BITWISE = re.compile(r"\s[|&^]\s|\s(?:<<|>>)\s")
+
+
+def float_bits(line, scalars, pointers):
+    """Integer and pointer casts of float storage are bit copies in this game (it converts floats to integers only
+    through __ftol / ROUND), but C converts the value: a pointer read through a float field became 0. So
+    (int)f -> (int)*(uint *)&f, likewise f[i] / *(float *)p, and f = (float)(bits | 0x1000) -> *(uint *)&f = ..."""
+    def lvalue_end(s, pos):
+        """end of the float lvalue starting at s[pos], or -1"""
+        m = re.match(r"\w+", s[pos:])
+        if not m:
+            return -1
+        name, end = m.group(0), pos + m.end()
+        if name in pointers and end < len(s) and s[end] == "[":
+            depth = 0
+            for k in range(end, len(s)):
+                depth += s[k] == "["
+                depth -= s[k] == "]"
+                if depth == 0:
+                    return k + 1
+            return -1
+        if name in scalars and not re.match(r"\s*[\[(]", s[end:]):
+            return end
+        return -1
+
+    out, pos = [], 0
+    for m in INT_CAST.finditer(line):
+        if m.start() < pos or line[m.start() - 1:m.start()].isalnum():
+            continue
+        end = lvalue_end(line, m.end())
+        if end < 0:
+            continue
+        out.append(line[pos:m.end()] + f"*(uint *)&{line[m.end():end]}")
+        pos = end
+    line = "".join(out) + line[pos:]
+
+    am = re.match(r"^(\s*)(.+?) = \(float\)(\(.*\));(\s*)$", line)
+    if am and lvalue_end(am.group(2), 0) == len(am.group(2)) and BITWISE.search(am.group(3)):
+        line = f"{am.group(1)}*(uint *)&{am.group(2)} = {am.group(3)};{am.group(4)}"
+    return line
+
+
+VCALL = "(**(code **)"
+
+
+def matching_paren(s, i):
+    """index of the ")" closing the "(" at s[i], or -1"""
+    depth = 0
+    for k in range(i, len(s)):
+        if s[k] in "([":
+            depth += 1
+        elif s[k] in ")]":
+            depth -= 1
+            if depth == 0:
+                return k
+    return -1
+
+
+def split_top(s, sep):
+    """s split at the separators outside parentheses and brackets"""
+    parts, depth, cur, k = [], 0, "", 0
+    while k < len(s):
+        ch = s[k]
+        depth += ch in "(["
+        depth -= ch in ")]"
+        if depth == 0 and s.startswith(sep, k):
+            parts.append(cur)
+            cur, k = "", k + len(sep)
+            continue
+        cur += ch
+        k += 1
+    return parts + [cur]
+
+
+def vcall_this(line, counter=None):
+    """Virtual calls on objects of unknown type, (**(code **)(*obj + 8))(args), lose their "this": MSVC passes it in
+    ECX and Ghidra doesn't show it. They become __thiscall calls with the object as "this", read once:
+    ({ void *vcall_N = (void *)(obj); ((int (__thiscall *)(void *, ...))*(code **)(*(int *)vcall_N + 8))(vcall_N,
+    args); })"""
+    counter = counter if counter is not None else [0]
+    out, pos = [], 0
+    while True:
+        i = line.find(VCALL, pos)
+        if i < 0:
+            break
+        j = i + len(VCALL)
+        inner, after = None, -1
+        if line[j:j + 1] == "(":
+            k = matching_paren(line, j)
+            if k > 0:
+                inner, after = line[j + 1:k], k + 1
+        else:
+            m = re.match(r"\*\s*\w+(?:\[[^\]]*\])?", line[j:])
+            if m:
+                inner, after = m.group(0), j + m.end()
+        if inner is None or not inner.strip().startswith("*") or line[after:after + 2] != ")(":
+            out.append(line[pos:j])
+            pos = j
+            continue
+        end = matching_paren(line, after + 1)
+        if end < 0:
+            break
+        args = line[after + 2:end].strip()
+        parts = split_top(inner.strip()[1:], " + ")
+        obj, slot = (" + ".join(parts[:-1]), parts[-1]) if len(parts) > 1 else (parts[0], "0")
+        obj = vcall_this(obj, counter)
+        arg_list = [vcall_this(a.strip(), counter) for a in split_top(args, ",")] if args else []
+        counter[0] += 1
+        t = f"vcall_{counter[0]}"
+        types = ", ".join(["void *"] + ["int" if "({" in a else f"__typeof__({a})" for a in arg_list])
+        call_args = ", ".join([t] + arg_list)
+        out.append(line[pos:i] + f"({{ void *{t} = (void *)({obj}); "
+                   f"((int (__thiscall *)({types}))*(code **)(*(int *){t} + ({slot})))({call_args}); }})")
+        pos = end + 1
+    return "".join(out) + line[pos:]
+
+
 def fix_pseudo_storage(lines, class_methods):
     """Give Ghidra's pseudo-variables real storage, function by function:
     - stack0xNNNNNNNN (a stack slot relative to the stack pointer at entry): positive offsets are the incoming
       arguments, addressed from the first stack parameter; negative ones are local buffers Ghidra never made into
       variables, which become a per-function byte array ghidra_frame
     - _param_N / _local_X / _xStack_X (a wider view of the same slot): an access through that variable's address
-    - register0x00000010 (ESP): the frame address
+    - register0x00000010 (ESP at entry): the frame address + 4, so +4 is the first stack argument
+    - in_stack_ffffXXXX: the same frame slot as stack0xffffXXXX (an outgoing argument area the code filled)
     - a method of the function's own class called without its class prefix (vf01(this, ...)): qualified
     Everything stays C; the semantics match the original stack layout as far as clang's frame allows."""
     out = []
@@ -472,11 +593,18 @@ def fix_pseudo_storage(lines, class_methods):
         # separately by clang, a callee filling the structure through the first piece would overrun it. So they all
         # live in one frame array at their original offsets, like the unnamed stack0xffffff.. slots.
         frame_vars = {}
+        in_stack = {}  # in_stack_fffffed8: the same slot as stack0xfffffed8 (an argument area the code filled)
         kept_body = []
         in_decls = True  # Ghidra declares every local in one block at the top, ended by a blank line
         for line in body:
             if in_decls and not line.strip():
                 in_decls = False
+            sm = re.match(r"^\s+([A-Za-z_][\w ]*?)\s*(\*+)?\s*(in_stack_([0-9a-f]{8}))\s*;\s*$", line) \
+                if in_decls else None
+            if sm and int(sm.group(4), 16) >= 0x80000000:
+                in_stack[sm.group(3)] = (sm.group(1).strip() + (" " + sm.group(2) if sm.group(2) else ""),
+                                         0x100000000 - int(sm.group(4), 16))
+                continue
             dm = FRAME_DECL.match(line) if in_decls else None
             if dm and dm.group(1).split()[0] not in ("return", "goto", "case", "else", "do"):
                 frame_vars[dm.group(3)] = (dm.group(1).strip() + (" " + dm.group(2) if dm.group(2) else ""),
@@ -488,7 +616,7 @@ def fix_pseudo_storage(lines, class_methods):
 
         # stack0x...
         offsets = sorted({int(s, 16) for s in STACK_REF.findall(text)})
-        negative = [0x100000000 - o for o in offsets if o >= 0x80000000]
+        negative = [0x100000000 - o for o in offsets if o >= 0x80000000] + [off for _, off in in_stack.values()]
         deepest = max(negative + [off for _, off, _ in frame_vars.values()] + [0])
         frame = deepest + 16 if deepest else 0
         if frame:
@@ -535,7 +663,8 @@ def fix_pseudo_storage(lines, class_methods):
             return split.get(mm.group(1), mm.group(0))
 
         if REGISTER_ESP in text:
-            decls.append(f"  undefined1 *{REGISTER_ESP} = (undefined1 *)__builtin_frame_address(0);\n")
+            # the stack pointer at entry: above the saved EBP, so [+4] is the first stack argument as on the Xbox
+            decls.append(f"  undefined1 *{REGISTER_ESP} = (undefined1 *)__builtin_frame_address(0) + 4;\n")
 
         # bare method names of the function's own class (or of a class named on the same line)
         # by now Class::method is spelled Class__method; the class is the part before the last "__"
@@ -545,9 +674,9 @@ def fix_pseudo_storage(lines, class_methods):
             cls = None
 
         def qualify(line):
-            classes = [c for c in re.findall(r"\b([A-Za-z_]\w*?)__\w+", line) if c in class_methods]
-            if cls:
-                classes.append(cls)
+            # Ghidra leaves a name bare only for the function's own class, so that class goes first
+            classes = [cls] if cls else []
+            classes += [c for c in re.findall(r"\b([A-Za-z_]\w*?)__\w+", line) if c in class_methods and c != cls]
             for c in classes:
                 for meth in class_methods.get(c, ()):
                     if meth in names or meth == c:
@@ -557,9 +686,26 @@ def fix_pseudo_storage(lines, class_methods):
                     line = re.sub(rf"&{re.escape(meth)}\b", f"&{c}__{meth}", line)
             return line
 
+        # float storage holding integers or pointers (Ghidra typed a register or field float because it was also
+        # moved through the FPU): see float_bits
+        float_scalars, float_pointers = set(), set()
+        for t, n in params:
+            (float_pointers if re.fullmatch(r"float\s*\*", t.strip()) else
+             float_scalars if t.strip() == "float" else set()).add(n)
+        for line in body:
+            if not line.strip():
+                break
+            dm = re.match(r"^\s+float\s*(\*?)\s*(\w+)\s*;", line)
+            if dm:
+                (float_pointers if dm.group(1) else float_scalars).add(dm.group(2))
+
+        for name, (t, off) in in_stack.items():
+            frame_vars[name] = (t, off, None)
         frame_ref = re.compile(r"(?<![\w.>])(" + "|".join(map(re.escape, frame_vars)) + r")\b") if frame_vars else None
         new_body = []
         for line in body:
+            if float_scalars or float_pointers:
+                line = float_bits(line, float_scalars, float_pointers)
             if frame_ref:
                 line = frame_ref.sub(lambda mm: frame_var(mm.group(1)), line)
             line = STACK_REF.sub(stack_slot, line)
@@ -587,6 +733,8 @@ def preprocess(src, dst, class_methods=None):
         line = SWITCH_LINE.sub(r"\1switch((int)(\2)) {", line)
         line = CASE_FLOAT.sub(r"case \1:", CASE_POINTER.sub(r"case \1:", line))
         line = re.sub(r"\bNAN\b(?!\s*\()", '__builtin_nanf("")', line)
+        if VCALL in line:
+            line = vcall_this(line)
         # MSVC C++ exception frames built by hand on the Xbox (fs:[0] chain + a pointer to the function's unwind
         # record in 0x1ee000-0x1fa000). A port doesn't use them: the frame links go, fs:[0] reads as 0, and the
         # unwind-record address becomes null. (unaff_FS_OFFSET is otherwise an uninitialised pointer.)
@@ -714,6 +862,10 @@ def main():
     # globals the code uses as pointers (one pass over all files), and the pointer type the decompiler gives each
     pointer_globals = set()
     indexed_globals = set()
+    arrow_globals = set()  # used as G->field: a structure pointer, whatever else it is cast to
+    wide_globals = {}
+    wide_returns = dict((n, t) for t, n in re.findall(
+        rf"^({WIDE_TYPES})\s+(?:__\w+\s+)?(\w+)\s*\(", "\n".join(protos.values()) + "\n" + program_text, re.M))
     cast_votes = collections.defaultdict(collections.Counter)
     for p in pp_files:
         text = open(p, encoding="latin-1").read()
@@ -721,18 +873,71 @@ def main():
             pointer_globals.add(next(g for g in m.groups() if g))
         for m in re.finditer(rf"\b{_G}\s*\[", text):
             indexed_globals.add(m.group(1))
+        for m in re.finditer(rf"\b{_G}\s*->", text):
+            arrow_globals.add(m.group(1))
+        # 8-byte values stored into a label (a 64-bit counter, a double): the label is that wide
+        for func in re.split(r"(?m)^// [0-9a-f]{8} ", text):
+            # "piVar3 = G;" with "int *piVar3;": G holds an int * (a vote like a cast)
+            pointer_locals = dict((n, re.sub(r"\s+", " ", t).strip() + " " + s) for t, s, n in
+                                  re.findall(r"^\s+([A-Za-z_][\w ]*?)\s*(\*+)\s*(\w+)\s*;", func, re.M))
+            for m in re.finditer(rf"^\s+(\w+)\s*=\s*{_G}\s*;", func, re.M):
+                t = pointer_locals.get(m.group(1))
+                if t:
+                    cast_votes[m.group(2)][t] += 1
+            wide_locals = dict((n, t) for t, n in re.findall(rf"^\s+({WIDE_TYPES})\s+(\w+)\s*;", func, re.M))
+            for m in re.finditer(rf"(?<![\w.>*&]){_G}\s*=\s*(\w+)\s*([(;])", func):
+                t = wide_returns.get(m.group(2)) if m.group(3) == "(" else wide_locals.get(m.group(2))
+                if t:
+                    wide_globals[m.group(1)] = t
+            for m in re.finditer(rf"(?<![\w.>*&]){_G}\s*=\s*0x([0-9a-f]{{9,16}})\s*;", func):
+                wide_globals.setdefault(m.group(1), "undefined8")
         for m in re.finditer(rf"(?<![\w.>*]){_G}\s*=\s*\(\s*([A-Za-z_]\w*\s*\*+)\s*\)", text):
             cast_votes[m.group(1)][re.sub(r"\s+", " ", m.group(2)).replace(" *", " *")] += 1
     known_types = set(re.findall(r"typedef\s[^;]*?\b(\w+)\s*;", program_text))
     known_types |= set(re.findall(r"\b(?:struct|union|enum)\s+(\w+)", program_text))
     known_types |= {"void", "char", "int", "uint", "byte", "short", "ushort", "float", "double", "undefined",
                     "undefined1", "undefined2", "undefined4", "undefined8", "code", "dword", "word", "bool"}
+    primitive = {"void", "char", "int", "uint", "byte", "short", "ushort", "float", "double", "undefined",
+                 "undefined1", "undefined2", "undefined4", "undefined8", "code", "dword", "word", "bool"}
     pointer_types = {}
+    arrow_types = {}  # G->field on a label typed otherwise: the structure pointer type assigned to it
     for g, votes in cast_votes.items():
         t = votes.most_common(1)[0][0]
         base, stars = t.replace("*", "").strip(), t.count("*")
         if base in known_types:
             pointer_types[g] = f"{base} {'*' * stars}"
+        if g in arrow_globals and (base in primitive or stars != 1):
+            structs = [s for s, _ in votes.most_common() if s.count("*") == 1 and
+                       s.replace("*", "").strip() not in primitive and s.replace("*", "").strip() in known_types]
+            if structs:
+                arrow_types[g] = structs[0].replace("*", "").strip()
+    # Ghidra types an untyped label per function: where a function treats a pointer label as an integer
+    # ("iVar2 = G;" into an int local, "(int)G"), its "G + 4" is 4 bytes on, not 4 elements: there it becomes
+    # "(int)G + 4". Labels declared as byte pointers scale the same either way.
+    scaled = {g for g, t in pointer_types.items() if t.replace(" ", "") not in ("undefined1*", "char*", "byte*")}
+    scaled |= {g for g in pointer_globals if g not in pointer_types and g in indexed_globals}
+    arrow_ref = re.compile(r"(?<![\w.>])(" + "|".join(map(re.escape, arrow_types)) + r")\s*->") if arrow_types else None
+
+    def integer_view(func):
+        int_locals = set(re.findall(r"^\s+(?:int|uint|undefined4|dword)\s+(\w+)\s*;", func, re.M))
+        views = {m.group(2) for m in re.finditer(rf"^\s+(\w+)\s*=\s*{_G}\s*;", func, re.M) if m.group(1) in int_locals}
+        views |= set(re.findall(rf"\((?:int|uint)\)\s*{_G}\b", func))
+        return views & scaled
+
+    for p in pp_files:
+        text = open(p, encoding="latin-1").read()
+        new = arrow_ref.sub(lambda mm: f"(({arrow_types[mm.group(1)]} *){mm.group(1)})->", text) if arrow_ref else text
+        parts = re.split(r"(?m)(^// [0-9a-f]{8} .*$)", new)
+        for k in range(2, len(parts), 2):
+            views = integer_view(parts[k])
+            if views:
+                ref = re.compile(r"(?<![\w.>)])(?<!\(int\))(?<!\(uint\))(" + "|".join(map(re.escape, views)) +
+                                 r")(\s*[+-]\s*(?:0x|\d))")
+                parts[k] = ref.sub(r"(int)\1\2", parts[k])
+        new = "".join(parts)
+        if new != text:
+            with open(p, "w", encoding="latin-1") as f:
+                f.write(new)
 
     with open(os.path.join(build, "globals.h"), "w") as f:
         f.write("/* Generated by tools/compile_check.py: global labels used by the decompiled code. */\n")
@@ -763,6 +968,8 @@ def main():
                 # most; with no such cast, an indexed label is a dword array, anything else byte data.
                 t = pointer_types.get(g) or ("undefined4 *" if g in indexed_globals else "undefined1 *")
                 f.write(f"extern {t}{g}; /* dereferenced by the code */\n")
+            elif g in wide_globals:
+                f.write(f"extern {wide_globals[g]} {g}; /* holds an 8-byte value */\n")
             else:
                 f.write(f"extern undefined4 {g};\n")
     print(f"{len(pp_files)} files, {len(globals_used - defined)} global labels declared "

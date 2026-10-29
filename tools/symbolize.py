@@ -22,8 +22,14 @@ def main():
             addrs.append(int(parts[0], 16))
             names.append(re.sub(r"@\d+$", "", parts[2].lstrip("_")))
     for line in text.splitlines():
-        m = re.match(r"\[crash\] (?:frame|stack) ([0-9a-fA-F]{8})", line)
-        if m and line.startswith("[crash] stack"):
+        c = re.match(r"\[calls\] fn ([0-9a-fA-F]{8}) (x\d+)", line)
+        if c:
+            a = int(c.group(1), 16)
+            i = bisect.bisect_right(addrs, a) - 1
+            print(f"  {c.group(2):>8}  {names[i] if i >= 0 else '?'}")
+            continue
+        m = re.match(r"\[(?:crash|sample)\] (?:frame|stack) ([0-9a-fA-F]{8})", line)
+        if m and " stack " in line[:16]:
             a = int(m.group(1), 16)
             i = bisect.bisect_right(addrs, a) - 1
             # stack words: only those that look like code addresses in the .exe are worth naming
@@ -31,7 +37,7 @@ def main():
                 print(f"  stack {a:08x}  {names[i]}+{a - addrs[i]:#x}")
             continue
         if not m:
-            if line.startswith("[crash]") or line.startswith("[game]") or line.startswith("[port]"):
+            if line.startswith("["):  # the port's tagged lines ([crash], [port], [d3d], [xapi], [sample], [game])
                 print(line)
             continue
         a = int(m.group(1), 16)

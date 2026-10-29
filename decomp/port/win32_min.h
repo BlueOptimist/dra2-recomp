@@ -88,6 +88,63 @@ WINIMPORT BOOL WINAPI HeapFree(HANDLE heap, DWORD flags, void *mem);
 WINIMPORT void *WINAPI VirtualAlloc(void *address, SIZE_T size, DWORD type, DWORD protect);
 WINIMPORT BOOL WINAPI VirtualFree(void *address, SIZE_T size, DWORD type);
 
+/* windows and GDI (user32, gdi32) */
+typedef void *HWND;
+typedef void *HDC;
+typedef void *HINSTANCE;
+typedef unsigned int UINT;
+typedef unsigned int WPARAM;
+typedef long LPARAM;
+typedef long LRESULT;
+typedef LRESULT(WINAPI *WNDPROC)(HWND, UINT, WPARAM, LPARAM);
+typedef struct { long left, top, right, bottom; } RECT;
+typedef struct { HWND hwnd; UINT message; WPARAM wParam; LPARAM lParam; DWORD time; long pt_x, pt_y; } MSG;
+typedef struct {
+    UINT style;
+    WNDPROC lpfnWndProc;
+    int cbClsExtra, cbWndExtra;
+    HINSTANCE hInstance;
+    void *hIcon, *hCursor, *hbrBackground;
+    const char *lpszMenuName, *lpszClassName;
+} WNDCLASSA;
+typedef struct {
+    DWORD biSize;
+    long biWidth, biHeight;
+    WORD biPlanes, biBitCount;
+    DWORD biCompression, biSizeImage;
+    long biXPelsPerMeter, biYPelsPerMeter;
+    DWORD biClrUsed, biClrImportant;
+} BITMAPINFOHEADER;
+typedef struct { BITMAPINFOHEADER bmiHeader; DWORD bmiColors[1]; } BITMAPINFO;
+
+#define WS_OVERLAPPEDWINDOW 0x00CF0000
+#define WS_VISIBLE 0x10000000
+#define CW_USEDEFAULT ((int)0x80000000)
+#define WM_DESTROY 0x0002
+#define WM_CLOSE 0x0010
+#define PM_REMOVE 0x0001
+#define SW_SHOW 5
+#define BI_RGB 0
+#define DIB_RGB_COLORS 0
+#define SRCCOPY 0x00CC0020
+
+WINIMPORT unsigned short WINAPI RegisterClassA(const WNDCLASSA *wc);
+WINIMPORT HWND WINAPI CreateWindowExA(DWORD ex_style, const char *cls, const char *title, DWORD style, int x, int y,
+                                      int w, int h, HWND parent, void *menu, HINSTANCE instance, void *param);
+WINIMPORT LRESULT WINAPI DefWindowProcA(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
+WINIMPORT BOOL WINAPI PeekMessageA(MSG *msg, HWND hwnd, UINT min, UINT max, UINT remove);
+WINIMPORT BOOL WINAPI TranslateMessage(const MSG *msg);
+WINIMPORT LRESULT WINAPI DispatchMessageA(const MSG *msg);
+WINIMPORT BOOL WINAPI GetClientRect(HWND hwnd, RECT *rect);
+WINIMPORT BOOL WINAPI AdjustWindowRect(RECT *rect, DWORD style, BOOL menu);
+WINIMPORT BOOL WINAPI ShowWindow(HWND hwnd, int cmd);
+WINIMPORT HDC WINAPI GetDC(HWND hwnd);
+WINIMPORT int WINAPI ReleaseDC(HWND hwnd, HDC dc);
+WINIMPORT void WINAPI PostQuitMessage(int code);
+WINIMPORT HMODULE WINAPI GetModuleHandleA(const char *name);
+WINIMPORT int WINAPI StretchDIBits(HDC dc, int x, int y, int w, int h, int sx, int sy, int sw, int sh,
+                                   const void *bits, const BITMAPINFO *bmi, UINT usage, DWORD rop);
+
 WINIMPORT HMODULE WINAPI LoadLibraryA(const char *name);
 WINIMPORT void *WINAPI GetProcAddress(HMODULE module, const char *name);
 WINIMPORT DWORD WINAPI GetModuleFileNameA(HMODULE module, char *name, DWORD size);

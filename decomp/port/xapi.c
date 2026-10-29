@@ -11,6 +11,8 @@
  */
 #include "win32_min.h"
 
+int printf(const char *format, ...);
+
 void port_todo(const char *name);
 
 /* ------------------------------------------------------------------------------------------------ helpers -- */
@@ -164,17 +166,35 @@ void XAPILIB__XPhysicalFree(void *address) { VirtualFree(address, 0, MEM_RELEASE
 
 /* ------------------------------------------------------------------------------------------------- files -- */
 
-/* FUN_0012d671: CreateFileA */
+#define FILE_FLAG_NO_BUFFERING 0x20000000u
+
+/* FUN_0012d671: CreateFileA. The streaming reader opens files unbuffered + overlapped; unbuffered I/O on Windows
+ * needs buffers and offsets aligned to the drive's sector size (up to 4 KB), stricter than the DVD's 2 KB, so it
+ * goes (overlapped stays: the game polls the reads). */
 void *__stdcall FUN_0012d671(const char *name, DWORD access, DWORD share, void *security, DWORD disposition,
                              DWORD flags, void *templ)
 {
     char path[MAX_PATH];
-    return CreateFileA(map_path(name, path, sizeof path), access, share, security, disposition, flags, templ);
+    HANDLE h = CreateFileA(map_path(name, path, sizeof path), access, share, security, disposition,
+                           flags & ~FILE_FLAG_NO_BUFFERING, templ);
+    if (h == INVALID_HANDLE_VALUE && disposition == 3 /* OPEN_EXISTING */) {
+        DWORD error = GetLastError();
+        printf("[xapi] can't open %s (%s): error %lu\n", name, path, error);
+        SetLastError(error);
+    }
+    return h;
 }
 
 int __stdcall XAPILIB__ReadFile(void *h, void *buffer, DWORD size, DWORD *read, void *overlapped)
 {
-    return ReadFile(h, buffer, size, read, overlapped);
+    int ok = ReadFile(h, buffer, size, read, overlapped);
+    if (!ok) {
+        DWORD error = GetLastError();
+        if (error != ERROR_IO_PENDING && error != 38 /* ERROR_HANDLE_EOF */)
+            printf("[xapi] ReadFile failed: error %lu\n", error);
+        SetLastError(error);
+    }
+    return ok;
 }
 
 int __stdcall XAPILIB__WriteFile(void *h, const void *buffer, DWORD size, DWORD *written, void *overlapped)
@@ -458,10 +478,21 @@ static int xinput_ready(void)
     return win_get_state != 0;
 }
 
+/* XInputGetState on an empty slot is slow, and the game asks for device changes every tick: presence is re-polled
+ * at most twice a second */
 static DWORD connected_pads(void)
 {
-    DWORD mask = 0;
+    static DWORD mask;
+    static LONGLONG next_poll, frequency;
+    LONGLONG now;
+    if (!frequency)
+        QueryPerformanceFrequency(&frequency);
+    QueryPerformanceCounter(&now);
+    if (now < next_poll)
+        return mask;
+    next_poll = now + frequency / 2;
     WIN_STATE st;
+    mask = 0;
     if (xinput_ready())
         for (DWORD i = 0; i < 4; i++)
             if (win_get_state(i, &st) == ERROR_SUCCESS)

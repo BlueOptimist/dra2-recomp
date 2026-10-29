@@ -69,8 +69,8 @@ TARGET = "i686-pc-windows-msvc"
 
 
 def compile_obj(args):
-    clang, src, obj, includes = args
-    flags = [f"--target={TARGET}" if f.startswith("--target=") else f for f in OBJ_FLAGS]
+    clang, src, obj, includes, *extra = args
+    flags = [f"--target={TARGET}" if f.startswith("--target=") else f for f in OBJ_FLAGS] + list(extra)
     proc = subprocess.run([clang, *flags, *[f"-I{i}" for i in includes], src, "-o", obj],
                           capture_output=True, text=True, encoding="latin-1")
     return src, proc.returncode, proc.stderr
@@ -99,6 +99,8 @@ def main():
     decomp, llvm_bin = sys.argv[1], sys.argv[2]
     jobs = next((int(a.split("=")[1]) for a in sys.argv[3:] if a.startswith("--jobs=")), os.cpu_count())
     TARGET = next((a.split("=", 1)[1] for a in sys.argv[3:] if a.startswith("--target=")), TARGET)
+    # --instrument: the game's functions count their calls (port/calls.c; DRA2_SAMPLE prints what ran)
+    instrument = ["-finstrument-functions"] if "--instrument" in sys.argv[3:] else []
     clang = os.path.join(llvm_bin, "clang.exe")
     llvm_nm = os.path.join(llvm_bin, "llvm-nm.exe")
     build = os.path.join(decomp, "build")
@@ -127,7 +129,7 @@ def main():
                 f.write(text)
             obj = os.path.join(obj_dir, rel[:-2].replace(os.sep, "_") + ".obj")
             os.makedirs(obj_dir, exist_ok=True)
-            jobs_list.append((clang, src, obj, [build, decomp]))
+            jobs_list.append((clang, src, obj, [build, decomp], *instrument))
     print(f"functions stubbed (still have compile errors): {stubbed}")
     # hand-written port code (runtime stand-ins, later the platform layer)
     for src in sorted(glob.glob(os.path.join(decomp, "port", "*.c"))):
@@ -162,7 +164,7 @@ def main():
 
     # symbols
     defined_by, needed_by = {}, collections.defaultdict(set)
-    for _, src, obj, _ in jobs_list:
+    for _, src, obj, *_ in jobs_list:
         if not os.path.exists(obj):
             continue
         d, u = nm(llvm_nm, obj)
