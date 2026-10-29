@@ -1,0 +1,2 @@
+call	convention	return	params	note
+001589aa	__thiscall	int	pointer,int	FUN_00158930: pool->vf03(size); the size push (edi) is shared with the other branch's vf00 call

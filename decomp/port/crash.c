@@ -58,7 +58,11 @@ static void print_chain(const char *tag, DWORD eip, DWORD *ebp)
         printf("[%s] frame %08lx\n", tag, (unsigned long)chain[k]);
 }
 
+static void print_watches(void);
+static void parse_watch(void);
 static DWORD sampler_thread_id;
+static int calls_limit = 80;  /* DRA2_CALLS=<n>: how many functions each "[calls]" report lists */
+void port_calls_report(int limit);
 WINIMPORT DWORD WINAPI GetCurrentThreadId(void);
 
 static long WINAPI on_exception(EXCEPTION_POINTERS_32 *info)
@@ -90,6 +94,8 @@ static long WINAPI on_exception(EXCEPTION_POINTERS_32 *info)
     for (int k = 0; k < 12 && !IsBadReadPtr(esp + k, 4); k++)
         printf("[crash] stack %08lx\n", (unsigned long)esp[k]);
     print_chain("crash", CTX_U32(c, CTX_EIP), (DWORD *)CTX_U32(c, CTX_EBP));
+    print_watches();
+    port_calls_report(calls_limit);  /* with an -Instrument build: what ran since the last sample */
     return 0;
 }
 
@@ -107,8 +113,6 @@ WINIMPORT BOOL WINAPI GetThreadContext(HANDLE thread, void *context);
 
 static HANDLE sampled_thread;
 static DWORD sample_ms;
-static int calls_limit = 80;  /* DRA2_CALLS=<n>: how many functions each "[calls]" report lists */
-void port_calls_report(int limit);
 
 /* DRA2_WATCH=addr[:offset[:offset...]],...: dwords printed with every sample ("[sample] watch" lines). Each
  * ":offset" reads the pointer at the current address and moves to pointer+offset. Addresses (hex) are the .exe's;
@@ -200,6 +204,14 @@ static DWORD WINAPI sampler(void *param)
 void port_install_crash_reporter(void)
 {
     AddVectoredExceptionHandler(1, on_exception);
+    parse_watch();  /* printed with each sample and in a crash report */
+    char limit[12];
+    DWORD ln = GetEnvironmentVariableA("DRA2_CALLS", limit, sizeof limit);
+    if (ln && ln < sizeof limit) {
+        calls_limit = 0;
+        for (char *q = limit; *q >= '0' && *q <= '9'; q++)
+            calls_limit = calls_limit * 10 + (*q - '0');
+    }
     char value[16];
     DWORD n = GetEnvironmentVariableA("DRA2_SAMPLE", value, sizeof value);
     if (n && n < sizeof value) {
@@ -209,14 +221,6 @@ void port_install_crash_reporter(void)
             amount = amount * 10 + (*p - '0');
         if (amount > 0) {
             sample_ms = (DWORD)amount * (p[0] == 'm' && p[1] == 's' ? 1 : 1000);
-            parse_watch();
-            char limit[12];
-            DWORD ln = GetEnvironmentVariableA("DRA2_CALLS", limit, sizeof limit);
-            if (ln && ln < sizeof limit) {
-                calls_limit = 0;
-                for (char *q = limit; *q >= '0' && *q <= '9'; q++)
-                    calls_limit = calls_limit * 10 + (*q - '0');
-            }
             DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &sampled_thread, 0, 0,
                             DUPLICATE_SAME_ACCESS);
             CreateThread(0, 0, sampler, 0, 0, &sampler_thread_id);

@@ -476,6 +476,34 @@ def float_bits(line, scalars, pointers):
     return line
 
 
+ODD_STORE = re.compile(r"^(\s*)(\(?\s*\*\s*\(\s*undefined([3567])\s*\*\s*\)\s*)")
+
+
+def odd_store(line):
+    """'*(undefined3 *)p = v;' -> 'ghidra_store(p, v, 3);': undefined3/5/6/7 are wider C types, and a store through
+    them wrote past the field (see ghidra_types.h)."""
+    m = ODD_STORE.match(line)
+    if not m or not line.rstrip().endswith(";"):
+        return line
+    rest = line[m.end():].rstrip()[:-1]
+    wrapped = m.group(2).lstrip().startswith("(")  # "(*(undefined3 *)ADDR) = v;"
+    # the assignment's "=" outside any parentheses (not ==, <=, >=, !=)
+    depth = 1 if wrapped else 0
+    for k, ch in enumerate(rest):
+        depth += ch in "(["
+        depth -= ch in ")]"
+        if ch == "=" and depth == 0 and rest[k - 1:k] not in ("=", "<", ">", "!") and rest[k + 1:k + 2] != "=":
+            lhs, value = rest[:k].strip(), rest[k + 1:].strip()
+            if wrapped:  # drop the wrapper's ")"
+                if not lhs.endswith(")"):
+                    return line
+                lhs = lhs[:-1].strip()
+            if not lhs:
+                return line
+            return f"{m.group(1)}ghidra_store({lhs}, (unsigned long long)({value}), {m.group(3)});\n"
+    return line
+
+
 VCALL = "(**(code **)"
 
 
@@ -541,6 +569,14 @@ def vcall_this(line, counter=None):
         obj, slot = (" + ".join(parts[:-1]), parts[-1]) if len(parts) > 1 else (parts[0], "0")
         obj = vcall_this(obj, counter)
         arg_list = [vcall_this(a.strip(), counter) for a in split_top(args, ",")] if args else []
+
+        def bare(e):
+            e = re.sub(r"\(\s*[A-Za-z_][\w ]*\**\s*\)", "", e).strip()
+            while e.startswith("(") and e.endswith(")") and matching_paren(e, 0) == len(e) - 1:
+                e = e[1:-1].strip()
+            return e
+        if arg_list and bare(arg_list[0]) == bare(obj):
+            arg_list = arg_list[1:]  # "this" already shown (a call-site signature override): not twice
         counter[0] += 1
         t = f"vcall_{counter[0]}"
         types = ", ".join(["void *"] + ["int" if "({" in a else f"__typeof__({a})" for a in arg_list])
@@ -586,7 +622,8 @@ def fix_pseudo_storage(lines, class_methods):
         conv_regs = 1 if "__thiscall" in sig else 2 if "__fastcall" in sig else 0
         stack_params = names[conv_regs:]
         text = "".join(body)
-        decls = []
+        # a variable-length local: ESP is restored from EBP on return (callees' argument pops can differ)
+        decls = ["  char ghidra_keep_esp[ghidra_dynamic_one]; (void)ghidra_keep_esp;\n"]
 
         # Stack locals keep their original layout. Ghidra names them by their offset below the entry stack pointer
         # (local_158, auStack_104, fStack_34) and often splits one structure into several of them; laid out
@@ -594,6 +631,7 @@ def fix_pseudo_storage(lines, class_methods):
         # live in one frame array at their original offsets, like the unnamed stack0xffffff.. slots.
         frame_vars = {}
         in_stack = {}  # in_stack_fffffed8: the same slot as stack0xfffffed8 (an argument area the code filled)
+        arg_slots = {}  # pvStack0000001c: the caller's argument slot at entry ESP + 0x1c
         kept_body = []
         in_decls = True  # Ghidra declares every local in one block at the top, ended by a blank line
         for line in body:
@@ -604,6 +642,15 @@ def fix_pseudo_storage(lines, class_methods):
             if sm and int(sm.group(4), 16) >= 0x80000000:
                 in_stack[sm.group(3)] = (sm.group(1).strip() + (" " + sm.group(2) if sm.group(2) else ""),
                                          0x100000000 - int(sm.group(4), 16))
+                continue
+            # pvStack0000001c / iStack00000008: a slot in the caller's argument area (above the return address)
+            # that the function reuses as a variable. It must be that slot: the code also takes its address as
+            # "&param_1 + 24".
+            am = re.match(r"^\s+([A-Za-z_][\w ]*?)\s*(\*+)?\s*([a-z]{1,6}Stack([0-9a-f]{8}))\s*;\s*$", line) \
+                if in_decls else None
+            if am and 4 <= int(am.group(4), 16) < 0x80000000:
+                arg_slots[am.group(3)] = (am.group(1).strip() + (" " + am.group(2) if am.group(2) else ""),
+                                          int(am.group(4), 16))
                 continue
             dm = FRAME_DECL.match(line) if in_decls else None
             if dm and dm.group(1).split()[0] not in ("return", "goto", "case", "else", "do"):
@@ -620,7 +667,10 @@ def fix_pseudo_storage(lines, class_methods):
         deepest = max(negative + [off for _, off, _ in frame_vars.values()] + [0])
         frame = deepest + 16 if deepest else 0
         if frame:
-            decls.append(f"  undefined1 ghidra_frame[{frame:#x}] __attribute__((aligned(16)));"
+            # 4-byte aligned like the Xbox frame: a wider alignment makes clang realign ESP and address locals from
+            # it, and then a callee that pops a different argument size than its decompiled prototype says shifts
+            # every local (EBP-based frames survive that, the epilogue restores ESP)
+            decls.append(f"  undefined1 ghidra_frame[{frame:#x}] __attribute__((aligned(4)));"
                          f" /* the stack frame below the entry stack pointer, original layout */\n")
 
         def frame_var(name):
@@ -629,8 +679,11 @@ def fix_pseudo_storage(lines, class_methods):
                 return f"(*({t} (*)[{count}])&ghidra_frame[{frame - off:#x}])"
             return f"(*({t} *)&ghidra_frame[{frame - off:#x}])"
         first = stack_params[0] if stack_params else None
-        if offsets and any(o < 0x80000000 for o in offsets) and not first:
+        if (offsets and any(o < 0x80000000 for o in offsets) or arg_slots) and not first:
             decls.append("  undefined1 ghidra_args[0x1000]; /* no stack parameters: stand-in argument area */\n")
+        arg_exprs = {name: (f"(*({t} *)&((undefined1 *)&{first})[{o - 4:#x}])" if first
+                            else f"(*({t} *)&ghidra_args[{o:#x}])") for name, (t, o) in arg_slots.items()}
+        arg_ref = re.compile(r"(?<![\w.>])(" + "|".join(map(re.escape, arg_exprs)) + r")\b") if arg_exprs else None
 
         def stack_slot(mm):
             o = int(mm.group(1), 16)
@@ -708,8 +761,12 @@ def fix_pseudo_storage(lines, class_methods):
                 line = float_bits(line, float_scalars, float_pointers)
             if frame_ref:
                 line = frame_ref.sub(lambda mm: frame_var(mm.group(1)), line)
+            if arg_ref:
+                line = arg_ref.sub(lambda mm: arg_exprs[mm.group(1)], line)
             line = STACK_REF.sub(stack_slot, line)
             line = SPLIT_REF.sub(split_ref, line)
+            if "undefined" in line:
+                line = odd_store(line)
             if cls or "__" in line:
                 line = qualify(line)
             new_body.append(line)
@@ -735,6 +792,10 @@ def preprocess(src, dst, class_methods=None):
         line = re.sub(r"\bNAN\b(?!\s*\()", '__builtin_nanf("")', line)
         if VCALL in line:
             line = vcall_this(line)
+        # "*(int *)(&DAT_0031fa00 + iVar7)": the decompiler adds a byte offset to an untyped label (for a typed one
+        # it would index, (&G)[i]); declared with a wider type, C scaled the offset
+        line = re.sub(r"(\*\s*\([^()]*\*\s*\)\s*\(\s*)&(_?(?:DAT|PTR)_[0-9a-f]{8})(\s*[+-])",
+                      r"\1(undefined1 *)&\2\3", line)
         # MSVC C++ exception frames built by hand on the Xbox (fs:[0] chain + a pointer to the function's unwind
         # record in 0x1ee000-0x1fa000). A port doesn't use them: the frame links go, fs:[0] reads as 0, and the
         # unwind-record address becomes null. (unaff_FS_OFFSET is otherwise an uninitialised pointer.)
@@ -863,6 +924,27 @@ def main():
     pointer_globals = set()
     indexed_globals = set()
     arrow_globals = set()  # used as G->field: a structure pointer, whatever else it is cast to
+    # Scalar labels are as wide as their accesses: a char literal ("G == '\0'", "G = '\x01'") is a byte access,
+    # and no label is wider than the distance to the next one (analysis/data_symbols.tsv). Declared 4 bytes, the
+    # flag byte at 0x2f7b14 also read its neighbour 0x2f7b15.
+    byte_globals = set()
+    plain_deref = set()  # "*G" with no cast: the code reads what G points at with G's own element type
+    pointer_copies = []  # "H = G + ...;": G has H's pointer type
+    label_width = {}
+    symbols_tsv = os.path.join(decomp, "..", "analysis", "data_symbols.tsv")
+    if os.path.exists(symbols_tsv):
+        by_addr = {}
+        for row in csv.DictReader(open(symbols_tsv), delimiter="\t"):
+            if re.fullmatch(r"[0-9a-f]{8}", row["address"]) and "." not in row["name"]:
+                by_addr.setdefault(int(row["address"], 16), row["name"])
+        addrs = sorted(by_addr)
+        for a, b in zip(addrs, addrs[1:]):
+            width = b - a
+            for name in (by_addr[a], "_" + by_addr[a]):
+                label_width[name] = width
+        # labels Ghidra names by address (DAT_002f7b14) that the table doesn't list are bounded the same way
+        for a, b in zip(addrs, addrs[1:]):
+            label_width.setdefault(f"DAT_{a:08x}", b - a)
     wide_globals = {}
     wide_returns = dict((n, t) for t, n in re.findall(
         rf"^({WIDE_TYPES})\s+(?:__\w+\s+)?(\w+)\s*\(", "\n".join(protos.values()) + "\n" + program_text, re.M))
@@ -875,6 +957,17 @@ def main():
             indexed_globals.add(m.group(1))
         for m in re.finditer(rf"\b{_G}\s*->", text):
             arrow_globals.add(m.group(1))
+        for m in re.finditer(rf"(?<![\w)\]])\*\s*{_G}\b(?!\s*[\[(])", text):
+            plain_deref.add(m.group(1))
+        for m in re.finditer(rf"^\s*{_G}\s*=\s*{_G}\s*[+;]", text, re.M):
+            pointer_copies.append((m.group(1), m.group(2)))
+        for m in re.finditer(rf"(?<![\w.>*&]){_G}\s*(?:[=!]=|=)\s*'", text):
+            byte_globals.add(m.group(1))
+        for m in re.finditer(rf"'\s*[=!]=\s*{_G}\b", text):
+            byte_globals.add(m.group(1))
+        # indexed: "(&G)[iVar7] == '\0'", "(&G)[i] = '\x01'": a byte array, so the index is a byte offset
+        for m in re.finditer(rf"\(&{_G}\)\[[^\]]*\]\s*(?:[=!]=|=)\s*'", text):
+            byte_globals.add(m.group(1))
         # 8-byte values stored into a label (a 64-bit counter, a double): the label is that wide
         for func in re.split(r"(?m)^// [0-9a-f]{8} ", text):
             # "piVar3 = G;" with "int *piVar3;": G holds an int * (a vote like a cast)
@@ -911,6 +1004,17 @@ def main():
                        s.replace("*", "").strip() not in primitive and s.replace("*", "").strip() in known_types]
             if structs:
                 arrow_types[g] = structs[0].replace("*", "").strip()
+    # labels with no cast of their own take the type of the typed label they are copied (or offset) into
+    for _ in range(3):
+        for h, g in pointer_copies:
+            if g not in pointer_types and h in pointer_types and g in pointer_globals:
+                pointer_types[g] = pointer_types[h]
+    # the rest: dereferenced as "*G", a dword pointer (what the game's untyped pointers mostly are); otherwise a
+    # byte pointer ("*(T *)(G + 8)" style)
+    for g in pointer_globals:
+        if g not in pointer_types and g in plain_deref:
+            pointer_types[g] = "undefined4 *"
+
     # Ghidra types an untyped label per function: where a function treats a pointer label as an integer
     # ("iVar2 = G;" into an int local, "(int)G"), its "G + 4" is 4 bytes on, not 4 elements: there it becomes
     # "(int)G + 4". Labels declared as byte pointers scale the same either way.
@@ -970,6 +1074,10 @@ def main():
                 f.write(f"extern {t}{g}; /* dereferenced by the code */\n")
             elif g in wide_globals:
                 f.write(f"extern {wide_globals[g]} {g}; /* holds an 8-byte value */\n")
+            elif g in byte_globals or label_width.get(g, 4) == 1:
+                f.write(f"extern undefined1 {g}; /* a byte */\n")
+            elif label_width.get(g, 4) in (2, 3):
+                f.write(f"extern undefined2 {g}; /* the next label is 2 bytes on */\n")
             else:
                 f.write(f"extern undefined4 {g};\n")
     print(f"{len(pp_files)} files, {len(globals_used - defined)} global labels declared "

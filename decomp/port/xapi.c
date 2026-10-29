@@ -190,8 +190,9 @@ int __stdcall XAPILIB__ReadFile(void *h, void *buffer, DWORD size, DWORD *read, 
     int ok = ReadFile(h, buffer, size, read, overlapped);
     if (!ok) {
         DWORD error = GetLastError();
-        if (error != ERROR_IO_PENDING && error != 38 /* ERROR_HANDLE_EOF */)
-            printf("[xapi] ReadFile failed: error %lu\n", error);
+        static int reported;
+        if (error != ERROR_IO_PENDING && error != 38 /* ERROR_HANDLE_EOF */ && reported++ < 5)
+            printf("[xapi] ReadFile(%p, %lu bytes) failed: error %lu\n", buffer, (unsigned long)size, error);
         SetLastError(error);
     }
     return ok;

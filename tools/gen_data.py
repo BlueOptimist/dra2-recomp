@@ -95,7 +95,8 @@ def main():
             if not m:
                 continue
             for j in range(i + 1, min(i + 12, len(lines))):
-                s = lines[j].strip()
+                # stubbed functions (weak, replaceable by port/) start with the attribute
+                s = lines[j].strip().replace("__attribute__((weak)) ", "")
                 if s.startswith(("/*", "//", "*")) or not s:
                     continue
                 names = PROTO_NAME.findall(s)

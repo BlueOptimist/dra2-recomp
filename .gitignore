@@ -31,6 +31,7 @@
 !/decomp/port/crash.c
 !/decomp/port/d3d8.c
 !/decomp/port/calls.c
+!/decomp/port/game_fixes.c
 !/decomp/port/win32_min.h
 
 !/analysis/
@@ -48,3 +49,5 @@
 !/analysis/ecx_this.tsv
 !/analysis/register_params.tsv
 !/analysis/varargs.tsv
+!/analysis/call_overrides.tsv
+!/analysis/fixed_signatures.tsv

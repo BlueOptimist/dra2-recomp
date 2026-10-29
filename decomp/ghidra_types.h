@@ -7,6 +7,21 @@ typedef unsigned char undefined;
 typedef unsigned char undefined1;
 typedef unsigned short undefined2;
 typedef unsigned int undefined3;
+/* Every decompiled function declares "char ghidra_keep_esp[ghidra_dynamic_one];" (compile_check.py). A
+ * variable-length local makes clang restore ESP from EBP on return instead of adding a constant. The game's
+ * callees don't always pop the argument bytes their decompiled prototypes promise (a virtual method that ends in
+ * "ret 4" called through a pointer typed with no arguments), and with a constant the caller then popped the wrong
+ * saved EBP and returned into garbage. ghidra_dynamic_one is 1 (port/platform.c). */
+extern int ghidra_dynamic_one;
+/* Stores of 3-, 5-, 6- and 7-byte values: the C types above are wider, so compile_check.py rewrites
+ * "*(undefined3 *)p = v;" into ghidra_store(p, v, 3), which writes exactly that many bytes (little-endian).
+ * A 4-byte store of a 3-byte field overwrote the next byte: the saved "this" right after a frame. */
+static inline void ghidra_store(void *p, unsigned long long v, int n)
+{
+    unsigned char *b = (unsigned char *)p;
+    for (int i = 0; i < n; i++, v >>= 8)
+        b[i] = (unsigned char)v;
+}
 typedef unsigned int undefined4;
 typedef unsigned long long undefined6;
 typedef unsigned long long undefined8;

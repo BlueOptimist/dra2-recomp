@@ -5,6 +5,9 @@ int printf(const char *format, ...);
 int strcmp(const char *a, const char *b);
 void abort(void);
 
+/* the size of the variable-length local every decompiled function declares (see ghidra_types.h) */
+int ghidra_dynamic_one = 1;
+
 /* Every entry of the Xbox kernel import table (start of .rdata) points at a generated stub that calls this with the
  * import's name (tools/gen_data.py). The game itself never calls the kernel: only the Xbox libraries do, and the port
  * replaces those, so reaching this means a library path the port still runs by mistake. */

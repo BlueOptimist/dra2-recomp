@@ -1,0 +1,40 @@
+﻿/* Game functions rewritten by hand, where the decompiled C can't say what the machine code does. Each one carries
+ * a "replaces <address>" marker: build_objects.py then turns the decompiled body into a weak stub, and this
+ * definition takes over at link time. Prototypes match build/protos.h, so callers link to these unchanged. */
+
+void __3CNoTrackObject__SAXPAX_Z(int p);  /* operator delete */
+
+/* replaces 00156710 Class_2a4884::vf00: a one-argument callback holding a C++ pointer to member,
+ * { vtable, target, method, this adjustment }. It calls target->*method(arg) and deletes itself:
+ *     mov ecx, [esi+0Ch] ; mov edx, [esi+4] ; push eax ; add ecx, edx ; call [esi+8]
+ * The decompiler shows only the call: the method ran with no "this", so the stream reader's completion
+ * (FUN_00158ba0) wrote through null. */
+typedef struct {
+    void *vftable;
+    char *target;
+    void (__thiscall *method)(void *self, unsigned int arg);
+    int adjust;
+} MemberCallback;
+
+void __thiscall Class_2a4884__vf00(MemberCallback *this, unsigned int param_1)
+{
+    this->method(this->target + this->adjust, param_1);
+    __3CNoTrackObject__SAXPAX_Z((int)this);
+}
+
+/* replaces 00157220 Class_2a4888::vf00: the stream reader's read-done callback, the same pointer to member
+ * (mov ecx, [esi+0Ch] ; add ecx, [esi+4] ; call [esi+8]). When the reader was told to restart (the byte at
+ * 0x2fa684), it rebuilds the reader object instead of calling. */
+extern unsigned char DAT_002fa684;
+void __thiscall Class_2a4884__ctor(void *this);
+
+void __thiscall Class_2a4888__vf00(MemberCallback *this, unsigned int param_1)
+{
+    if (DAT_002fa684) {
+        DAT_002fa684 = 0;
+        Class_2a4884__ctor(this->target);
+    } else {
+        this->method(this->target + this->adjust, param_1);
+    }
+    __3CNoTrackObject__SAXPAX_Z((int)this);
+}

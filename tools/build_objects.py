@@ -108,6 +108,14 @@ def main():
 
     broken = {r["address"] for r in csv.DictReader(open(os.path.join(build, "compile_report.tsv")), delimiter="\t")
               if r["errors"] != "0"}
+    # game functions port/ rewrites by hand ("/* replaces 00156710 ... */"): their decompiled body becomes a weak
+    # stub too, so the port's definition wins at link time
+    replaced = set()
+    for src in glob.glob(os.path.join(decomp, "port", "*.c")):
+        replaced |= set(re.findall(r"replaces ([0-9a-f]{8})\b", open(src, encoding="latin-1").read()))
+    broken |= replaced
+    if replaced:
+        print(f"functions replaced by port/: {len(replaced)}")
     for d in (obj_src, obj_dir):
         shutil.rmtree(d, ignore_errors=True)
     jobs_list = []

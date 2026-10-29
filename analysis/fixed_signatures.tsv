@@ -1,0 +1,6 @@
+address	signature	storage	evidence
+001d8a10	void * __thiscall FUN_001d8a10(void *this, int size);		allocator vtable method: mov eax,[esp+4]; push 44h; push file; push eax; call 1c8200 (debug alloc); add esp,0Ch; ret 4 - returns the allocation (tail of the call)
+001d8a30	void * __thiscall FUN_001d8a30(void *this, int size, char *file, int line);		allocator vtable method: forwards three stack arguments to 1c8200; ret 0Ch - returns the allocation
+001c8300	void * __cdecl FUN_001c8300(unsigned int size);		jmp 1d73d0: HeapAlloc(GetProcessHeap(), 0, size) ... ret (caller cleans: cdecl, not stdcall)
+000c9920	long long __stdcall FUN_000c9920(int param_1);		reads [esp+4] only, every exit is ret 4
+0013b4e0	unsigned int __cdecl FUN_0013b4e0(void *self, int value, float param_2, unsigned int flags);	params=ECX,EAX,stack+4,stack+8;return=EAX	this in ECX and an input in EAX (mov [ebp+54h], eax before any write), flags at [entry+8] (test bl, 8), plain ret: the caller cleans

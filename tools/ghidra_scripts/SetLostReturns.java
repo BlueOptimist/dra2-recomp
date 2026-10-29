@@ -13,13 +13,15 @@ import ghidra.program.model.data.DataType;
 import ghidra.program.model.data.Float10DataType;
 import ghidra.program.model.data.Undefined4DataType;
 import ghidra.program.model.data.VoidDataType;
+import ghidra.program.model.lang.Register;
 import ghidra.program.model.listing.Function;
+import ghidra.program.model.listing.VariableStorage;
 import ghidra.program.model.symbol.SourceType;
 
 public class SetLostReturns extends GhidraScript {
 	@Override
 	protected void run() throws Exception {
-		int changed = 0, kept = 0, missing = 0;
+		int changed = 0, kept = 0, missing = 0, thunks = 0, locked = 0;
 		try (BufferedReader in = new BufferedReader(new FileReader(getScriptArgs()[0]))) {
 			in.readLine();
 			for (String line; (line = in.readLine()) != null;) {
@@ -29,19 +31,36 @@ public class SetLostReturns extends GhidraScript {
 					missing++;
 					continue;
 				}
+				// A wrapper Ghidra treats as a thunk reports its target's signature here, but the export decompiles its
+				// own body as void. It isn't a plain jump, so it stops being a thunk and gets its own return type.
 				if (f.isThunk()) {
-					f = f.getThunkedFunction(true);
+					f.setThunkedFunction(null);
+					thunks++;
 				}
-				if (!(f.getReturnType() instanceof VoidDataType) || f.hasCustomVariableStorage()) {
+				if (!(f.getReturnType() instanceof VoidDataType)) {
 					kept++;
 					continue;
 				}
 				DataType rt = c[2].equals("float10") ? Float10DataType.dataType : Undefined4DataType.dataType;
-				f.setReturnType(rt, SourceType.USER_DEFINED);
+				if (f.hasCustomVariableStorage()) {
+					// custom storage needs the return's location too: EAX, or ST0 for x87 values
+					Register reg = currentProgram.getRegister(c[2].equals("float10") ? "ST0" : "EAX");
+					f.setReturn(rt, new VariableStorage(currentProgram, reg), SourceType.USER_DEFINED);
+				}
+				else {
+					f.setReturnType(rt, SourceType.USER_DEFINED);
+				}
+				// The decompiler infers a prototype again unless its source is user-defined (a tail-call wrapper shows
+				// no use of EAX, so it would come out void). Locking a signature whose parameters were only inferred
+				// would freeze it with none: then RepairSignatures.java commits the inferred parameters first.
+				if (!"unknown".equals(f.getCallingConventionName())) {
+					f.setSignatureSource(SourceType.USER_DEFINED);
+					locked++;
+				}
 				changed++;
 			}
 		}
-		println(String.format("return types restored: %d; already non-void or custom: %d; no function: %d", changed,
-			kept, missing));
+		println(String.format("return types restored: %d (%d of them thunks, %d signatures committed); already " +
+			"non-void: %d; no function: %d", changed, thunks, locked, kept, missing));
 	}
 }

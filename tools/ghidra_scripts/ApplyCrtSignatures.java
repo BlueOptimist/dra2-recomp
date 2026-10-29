@@ -1,7 +1,7 @@
 // Applies identified C runtime signatures from analysis/crt_signatures.tsv (address, signature, storage, evidence):
 // the name, return type, parameters and calling convention come from the C signature. A storage column such as
 // "params=ST1,ST0;return=ST0" or "params=ST0;return=EDX:EAX" puts parameters and return value in those registers
-// (custom storage). That's how MSVC's x87 helpers (_ftol, _CIpow, _CIatan2, ...) take their operands; with it the
+// (custom storage; "stack+N" is the stack slot at entry ESP + N). That's how MSVC's x87 helpers (_ftol, _CIpow, _CIatan2, ...) take their operands; with it the
 // decompiler shows the arguments at every call site instead of losing them on the FPU stack.
 // Args: <crt_signatures.tsv>
 // @category Digimon
@@ -26,7 +26,11 @@ import ghidra.program.model.listing.VariableStorage;
 import ghidra.program.model.symbol.SourceType;
 
 public class ApplyCrtSignatures extends GhidraScript {
-	private VariableStorage storage(String spec) throws Exception {
+	// "EAX", "EDX:EAX", or "stack+8" (the stack slot at entry ESP + 8, as wide as the parameter)
+	private VariableStorage storage(String spec, int size) throws Exception {
+		if (spec.startsWith("stack+")) {
+			return new VariableStorage(currentProgram, Integer.parseInt(spec.substring(6)), size);
+		}
 		String[] regs = spec.split(":");
 		Register[] r = new Register[regs.length];
 		for (int i = 0; i < regs.length; i++) {
@@ -86,11 +90,11 @@ public class ApplyCrtSignatures extends GhidraScript {
 					ParameterDefinition[] args = fd.getArguments();
 					List<Parameter> params = new ArrayList<>();
 					for (int i = 0; i < args.length; i++) {
-						params.add(new ParameterImpl(args[i].getName(), args[i].getDataType(), storage(ps[i]),
-							currentProgram));
+						params.add(new ParameterImpl(args[i].getName(), args[i].getDataType(),
+							storage(ps[i], args[i].getDataType().getLength()), currentProgram));
 					}
-					ReturnParameterImpl ret = new ReturnParameterImpl(fd.getReturnType(), storage(retSpec),
-						currentProgram);
+					ReturnParameterImpl ret = new ReturnParameterImpl(fd.getReturnType(),
+						storage(retSpec, fd.getReturnType().getLength()), currentProgram);
 					f.updateFunction(f.getCallingConventionName(), ret, params, FunctionUpdateType.CUSTOM_STORAGE,
 						true, SourceType.USER_DEFINED);
 					custom++;
