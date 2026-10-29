@@ -250,8 +250,8 @@ INDIRECT_CALL = re.compile(r"\(\*\s*([A-Za-z_]\w*(?:\s*(?:->|\.)\s*[A-Za-z_]\w*|
 NUMBER_ERROR = re.compile(r"\.c:(\d+):\d+: error: (?:invalid operands to binary expression \('([^']*)'(?: \(aka '[^']*'\))? "
                           r"and '([^']*)'|passing '[^']*'(?: \(aka '[^']*'\))? to parameter of incompatible type "
                           r"'([^']*)'|"
-                          r"assigning to 'undefined4 \*' \(aka '[^']*'\) from incompatible type '([^']*)'|"
-                          r"assigning to '([^']*)' from incompatible type 'undefined4 \*')")
+                          r"assigning to 'undefined[1-8] \*' \(aka '[^']*'\) from incompatible type '([^']*)'|"
+                          r"assigning to '([^']*)' from incompatible type 'undefined[1-8] \*')")
 # A local Ghidra typed as a function pointer but indexed like a byte pointer (p[0x84]): index it as bytes.
 FN_SUBSCRIPT_ERROR = re.compile(r"\.c:(\d+):(\d+): error: subscript of pointer to function type")
 # A label typed as a plain number but used as a pointer: "G = (T *)G->next" (free lists) gets G read as T *.
@@ -399,6 +399,9 @@ def image_constant(m):
 
 
 STACK_REF = re.compile(r"\bstack0x([0-9a-f]{8})\b")
+# a stack local's declaration: "  undefined1 local_158 [44];", "  float fStack_34;", "  int *piStack_10;"
+FRAME_DECL = re.compile(r"^\s+([A-Za-z_][\w ]*?)\s*(\*+)?\s*((?:local|[a-zA-Z]{1,6}Stack)_([0-9a-f]+))"
+                        r"\s*(\[\s*(\w+)\s*\])?\s*;\s*$")
 SPLIT_REF = re.compile(r"\b_((param_\d+)|(local_[0-9a-f]+)|([a-zA-Z]{1,4}Stack_[0-9a-f]+))\b")
 REGISTER_ESP = "register0x00000010"
 
@@ -464,12 +467,39 @@ def fix_pseudo_storage(lines, class_methods):
         text = "".join(body)
         decls = []
 
+        # Stack locals keep their original layout. Ghidra names them by their offset below the entry stack pointer
+        # (local_158, auStack_104, fStack_34) and often splits one structure into several of them; laid out
+        # separately by clang, a callee filling the structure through the first piece would overrun it. So they all
+        # live in one frame array at their original offsets, like the unnamed stack0xffffff.. slots.
+        frame_vars = {}
+        kept_body = []
+        in_decls = True  # Ghidra declares every local in one block at the top, ended by a blank line
+        for line in body:
+            if in_decls and not line.strip():
+                in_decls = False
+            dm = FRAME_DECL.match(line) if in_decls else None
+            if dm and dm.group(1).split()[0] not in ("return", "goto", "case", "else", "do"):
+                frame_vars[dm.group(3)] = (dm.group(1).strip() + (" " + dm.group(2) if dm.group(2) else ""),
+                                           int(dm.group(4), 16), dm.group(6))
+                continue
+            kept_body.append(line)
+        body = kept_body
+        text = "".join(body)
+
         # stack0x...
         offsets = sorted({int(s, 16) for s in STACK_REF.findall(text)})
         negative = [0x100000000 - o for o in offsets if o >= 0x80000000]
-        frame = (max(negative) + 16) if negative else 0
+        deepest = max(negative + [off for _, off, _ in frame_vars.values()] + [0])
+        frame = deepest + 16 if deepest else 0
         if frame:
-            decls.append(f"  undefined1 ghidra_frame[{frame:#x}]; /* stack slots below the entry stack pointer */\n")
+            decls.append(f"  undefined1 ghidra_frame[{frame:#x}] __attribute__((aligned(16)));"
+                         f" /* the stack frame below the entry stack pointer, original layout */\n")
+
+        def frame_var(name):
+            t, off, count = frame_vars[name]
+            if count:
+                return f"(*({t} (*)[{count}])&ghidra_frame[{frame - off:#x}])"
+            return f"(*({t} *)&ghidra_frame[{frame - off:#x}])"
         first = stack_params[0] if stack_params else None
         if offsets and any(o < 0x80000000 for o in offsets) and not first:
             decls.append("  undefined1 ghidra_args[0x1000]; /* no stack parameters: stand-in argument area */\n")
@@ -491,7 +521,9 @@ def fix_pseudo_storage(lines, class_methods):
             ptr = re.search(rf"\*\s*\(?\s*_{name}\b|\b_{name}\s*(?:\[|->)", text) is not None
             t = "undefined4 *" if ptr else "undefined4"
             base_declared = re.search(rf"\b{re.escape(name)}\s*(?:\[[^\]]*\])?\s*;", text) or name in names
-            if base_declared:
+            if name in frame_vars:
+                split[name] = f"(*({t} *)&{frame_var(name)})"
+            elif base_declared:
                 split[name] = f"(*({t} *)&{name})"
             elif name.startswith("param_") and first:
                 n = int(name.split("_")[1])
@@ -525,8 +557,11 @@ def fix_pseudo_storage(lines, class_methods):
                     line = re.sub(rf"&{re.escape(meth)}\b", f"&{c}__{meth}", line)
             return line
 
+        frame_ref = re.compile(r"(?<![\w.>])(" + "|".join(map(re.escape, frame_vars)) + r")\b") if frame_vars else None
         new_body = []
         for line in body:
+            if frame_ref:
+                line = frame_ref.sub(lambda mm: frame_var(mm.group(1)), line)
             line = STACK_REF.sub(stack_slot, line)
             line = SPLIT_REF.sub(split_ref, line)
             if cls or "__" in line:
@@ -676,11 +711,28 @@ def main():
         f.write("#pragma once\n" + "\n".join(protos.values()) + "\n")
     defined = set(re.findall(r"\b([A-Za-z_]\w*)\s*\(", program_text)) | set(protos)
 
-    # globals the code uses as pointers (one pass over all files)
+    # globals the code uses as pointers (one pass over all files), and the pointer type the decompiler gives each
     pointer_globals = set()
+    indexed_globals = set()
+    cast_votes = collections.defaultdict(collections.Counter)
     for p in pp_files:
-        for m in GLOBAL_POINTER_USE.finditer(open(p, encoding="latin-1").read()):
+        text = open(p, encoding="latin-1").read()
+        for m in GLOBAL_POINTER_USE.finditer(text):
             pointer_globals.add(next(g for g in m.groups() if g))
+        for m in re.finditer(rf"\b{_G}\s*\[", text):
+            indexed_globals.add(m.group(1))
+        for m in re.finditer(rf"(?<![\w.>*]){_G}\s*=\s*\(\s*([A-Za-z_]\w*\s*\*+)\s*\)", text):
+            cast_votes[m.group(1)][re.sub(r"\s+", " ", m.group(2)).replace(" *", " *")] += 1
+    known_types = set(re.findall(r"typedef\s[^;]*?\b(\w+)\s*;", program_text))
+    known_types |= set(re.findall(r"\b(?:struct|union|enum)\s+(\w+)", program_text))
+    known_types |= {"void", "char", "int", "uint", "byte", "short", "ushort", "float", "double", "undefined",
+                    "undefined1", "undefined2", "undefined4", "undefined8", "code", "dword", "word", "bool"}
+    pointer_types = {}
+    for g, votes in cast_votes.items():
+        t = votes.most_common(1)[0][0]
+        base, stars = t.replace("*", "").strip(), t.count("*")
+        if base in known_types:
+            pointer_types[g] = f"{base} {'*' * stars}"
 
     with open(os.path.join(build, "globals.h"), "w") as f:
         f.write("/* Generated by tools/compile_check.py: global labels used by the decompiled code. */\n")
@@ -699,14 +751,18 @@ def main():
             elif g.startswith("luakey_"):
                 f.write(f"extern char {g}[]; /* Lua key string label */\n")
             elif g.startswith(("_param_", "_local_", "register0x")) or re.fullmatch(r"_[a-zA-Z]{1,4}Stack_[0-9a-f]+", g):
-                star = "*" if g in pointer_globals else ""
-                f.write(f"extern undefined4 {star}{g}; /* Ghidra pseudo-variable (split or register storage) */\n")
+                ptype = "undefined1 *" if g in pointer_globals else "undefined4 "
+                f.write(f"extern {ptype}{g}; /* Ghidra pseudo-variable (split or register storage) */\n")
             elif g.startswith("XBE_FILE_HEADER_"):
                 f.write(f"extern struct {{ unsigned int magic; }} {g}; /* the XBE image header, mapped at 0x10000 */\n")
             elif g.startswith("D3D8__"):
                 f.write(f"extern unsigned int {g}; /* D3D8 render-state shadow variable */\n")
             elif g in pointer_globals:
-                f.write(f"extern undefined4 *{g}; /* dereferenced by the code */\n")
+                # The decompiler's own type for the label decides how its offsets scale: "G = (undefined1 *)..." means
+                # G + 4 is 4 bytes on, "G = (undefined4 *)..." means G[1] is the next dword. Use the type it assigns
+                # most; with no such cast, an indexed label is a dword array, anything else byte data.
+                t = pointer_types.get(g) or ("undefined4 *" if g in indexed_globals else "undefined1 *")
+                f.write(f"extern {t}{g}; /* dereferenced by the code */\n")
             else:
                 f.write(f"extern undefined4 {g};\n")
     print(f"{len(pp_files)} files, {len(globals_used - defined)} global labels declared "

@@ -20,16 +20,23 @@ extern initializer DAT_002bf870[];  /* first entry of the C++ initializer table 
 extern initializer DAT_002c2fd0[];  /* one past the last */
 
 int game_main(int argc, char **argv, char **envp);
+void port_install_crash_reporter(void);
 
 /* an address the generated data couldn't relocate still points into the Xbox image (0x10000-0x340000); the .exe is
  * linked at 0x400000 without ASLR, so nothing of ours can be there */
 static int is_xbox_address(unsigned address) { return address >= 0x10000 && address < 0x340000; }
+
+/* what startup is doing right now, for the crash reporter (crash.c): no output, so it doesn't disturb the run */
+volatile int port_init_index = -1;
+volatile unsigned port_init_slot;
+volatile int port_in_game_main;
 
 int main(int argc, char **argv)
 {
     int ran = 0, skipped = 0;
     /* unbuffered, so the log survives a crash; DRA2_TRACE_INIT=1 prints each initializer before calling it */
     setvbuf(__acrt_iob_func(1), 0, 4 /* _IONBF */, 0);
+    port_install_crash_reporter();
     int trace = getenv("DRA2_TRACE_INIT") != 0;
     (void)argc, (void)argv;
     for (initializer *entry = DAT_002bf870; entry < DAT_002c2fd0; entry++) {
@@ -40,13 +47,16 @@ int main(int argc, char **argv)
             skipped++;
             continue;
         }
+        port_init_index = ran;
+        port_init_slot = 0x2bf870 + 4 * (unsigned)(entry - DAT_002bf870);
         if (trace)
-            printf("[port] init %d: table slot %#x -> %p\n", ran, 0x2bf870 + 4 * (unsigned)(entry - DAT_002bf870),
-                   (void *)*entry);
+            printf("[port] init %d: table slot %#x -> %p\n", ran, port_init_slot, (void *)*entry);
         (*entry)();
         ran++;
     }
     printf("[port] static initializers: %d run, %d Xbox-library entries skipped\n", ran, skipped);
     printf("[port] calling game_main\n");
+    port_init_index = -1;
+    port_in_game_main = 1;
     return game_main(0, 0, 0);
 }

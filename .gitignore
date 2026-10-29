@@ -28,6 +28,8 @@
 !/decomp/port/xapi.c
 !/decomp/port/crt_math.c
 !/decomp/port/startup.c
+!/decomp/port/crash.c
+!/decomp/port/d3d8.c
 !/decomp/port/win32_min.h
 
 !/analysis/
@@ -42,3 +44,5 @@
 !/analysis/lua_signatures.tsv
 !/analysis/startup_signatures.tsv
 !/analysis/lost_returns.tsv
+!/analysis/ecx_this.tsv
+!/analysis/register_params.tsv

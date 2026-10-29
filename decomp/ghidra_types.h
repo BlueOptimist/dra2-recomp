@@ -89,6 +89,9 @@ typedef unsigned short word;
 #define __ceil_default ceil
 #define __floor_default floor
 #define FID_conflict__fread fread
+/* the second of the two "_fread or _fwrite" matches (overloads now carry their address); the game reads into the
+   buffer it passes, so it is fread */
+#define FID_conflict__fread_001e05a1 fread
 #define _malloc malloc
 
 /* Ghidra's floating-point pseudo-operations (x87 instructions it has no C operator for) */

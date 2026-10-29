@@ -284,10 +284,34 @@ The last 236 symbols went like this. Except where noted, the fixes are in `compi
 2. **Lost return values (`SetLostReturns.java`).** 421 callees were typed `void` while their callers used EAX after the call (`extraout_EAX`, 3,816 uses). Recompiled, those are uninitialised locals; the engine allocator "failed" with *Out of memory -- allocation of 20 bytes*. `analysis/lost_returns.tsv` lists them, and the script gave 395 of them a return value (`undefined4`, or `float10` for 9 in `ST0`). Backup: `ghidra/backup_before_returns/`.
 3. **Addresses written as integers.** 1,260 constants inside `.rdata`/`.data` were left as plain numbers by the decompiler (e.g. `FUN_00034660(0x2f42d0)`, or the bounds of a prime table handed to a `lower_bound`). They now become `((int)&DAT_<address>)`, which points into the regenerated data. Also, `&DAT_00000014` (a small constant shown as a label address) becomes `(undefined1 *)0x14`.
 
-**Where it stands.** 260 of the 3,534 static initializers run. Then `FUN_00143670` reads uninitialised heap memory: under the debugger, `0xbaadf01d` is Windows' debug-heap fill plus 0x10. Diagnosing is quick:
-- `DRA2_TRACE_INIT=1` prints each initializer before it runs;
-- `lldb -b -o run -- dra2.exe` (it ships with llvm-mingw) gives the faulting address;
-- `llvm-nm -n dra2.exe` maps that address to a function.
+### Startup: from the first initializer to Direct3D
+
+**All 3,514 game static initializers run, and `game_main` gets as far as creating the Direct3D device.** Each fix below came from a smoke-run crash, and each one is systematic, applied to the whole program rather than to one function.
+
+| problem | effect | fix |
+|---|---|---|
+| Untyped labels declared `undefined4 *` | `DAT_x + 4` scaled to 16 bytes: the name-registry map initialised the wrong fields | Each label gets the pointer type the decompiler assigns it (`G = (T *)…`, most common wins); indexed labels without one are `undefined4 *`, the rest byte pointers |
+| **489 + 31 `__thiscall` methods typed with stack conventions** | The object pointer showed as `in_ECX`, an uninitialised local, so constructors of globals wrote through garbage | `SetThiscall.java`, from the scan in `tools/find_register_inputs.py`, iterated until no new ones appeared (fixing a callee exposes its callers) |
+| **133 functions taking EAX/EDX arguments** (MSVC helpers, display-mode setup) | `in_EAX` / `in_EDX` uninitialised | `AddRegisterParams.java` adds an explicit parameter with that register as custom storage. Callers then pass it like any argument, and both sides use one prototype. Three rounds: 84, 34, 15 |
+| **320 overloaded names** (two `Class_2ae928::ctor`s …) | Calls went to the wrong overload, then through `code *`, which loses ECX | `RenameOverloads.java`: the lowest-address one keeps the name, the others get their address appended |
+| **Split stack structures** | Ghidra breaks one stack structure into several locals (`local_158[44]`, `local_12c`, …); clang laid them out apart, and a callee filling the structure overran the frame | Every named stack local and `stack0x…` slot lives in one per-function `ghidra_frame[]` at its original offset (names encode the offset) |
+| **2,131 data→data pointers Ghidra hadn't recorded** | Tables in `.rdata` kept raw Xbox addresses | `gen_data.py` relocates every aligned word that points inside `.rdata`/`.data` |
+| `game_main` didn't compile | It was a trap stub | Float writes to pointer-typed globals are now rewritten for any pointer type |
+| `fread` split from `fwrite` by the overload rename | Link error | `FID_conflict__fread_001e05a1` → `fread` (the game reads into the buffer it passes) |
+
+Ghidra backups were made before each change: `ghidra/backup_before_thiscall/` and `ghidra/backup_before_regparams/`.
+
+**Debugging tools.**
+- `port/crash.c` prints the exception, the registers, the top of the stack and the EBP frame chain, plus which initializer (or `game_main`) was running. It prints nothing during the run, so the run behaves exactly as it would untraced.
+- `tools/symbolize.py dra2.exe llvm-nm.exe log.txt` turns the addresses into functions with their Xbox address.
+- `DRA2_TRACE_INIT=1` prints every initializer before it runs.
+
+**Where it stands now.** `game_main` sets up the display mode and creates its Direct3D device through the stubs:
+- `XGSetSurfaceHeader`, `D3DResource_Register`, `Direct3D_CreateDevice`;
+- `SetTile`, `GetDepthStencilSurface2`, `GetBackBuffer2`;
+- `GetGammaRamp`, `SetGammaRamp`.
+
+It then writes through the null device and surface objects those returned (in `Class_2ae980::ctor`). `D3D_AllocContiguousMemory` is implemented (`port/d3d8.c`). **From here on, startup needs the Direct3D layer itself.**
 
 **Link status before these steps: 236 undefined symbols.**
 - **First link: 281.** The CRT, compiler helpers and Win32 imports resolved.
