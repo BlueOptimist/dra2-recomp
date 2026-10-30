@@ -88,7 +88,9 @@ def fix_float_pointer_casts(lines):
         m = DECL.match(line)
         if m and not line.lstrip().startswith("return"):
             base, stars, name = m.group(1).split()[-1], m.group(2), m.group(3)
-            kinds[name] = "ptr" if stars else ("float" if base in FLOAT_TYPES else "other")
+            # an array ("float afStack_30 [8];") is its address in an expression, so (T *)arr is an ordinary
+            # pointer cast, not a bit copy of the first element (Class_2a68c8::vf01 passed the floats' bits)
+            kinds[name] = "array" if m.group(4) else "ptr" if stars else ("float" if base in FLOAT_TYPES else "other")
         elif "(" in line and line.rstrip().endswith(")") and not line.startswith(" "):
             # function signature: record parameter kinds
             for p in re.findall(r"([A-Za-z_][\w ]*?)\s*(\*+)?\s*([A-Za-z_]\w*)\s*(?:,|\))", line.split("(", 1)[1]):
@@ -1144,6 +1146,10 @@ def main():
         for m in re.finditer(rf"\(__typeof__\({_G}\)\)\(\w+\)\)->", text):
             arrow_globals.add(m.group(1))
             pointer_globals.add(m.group(1))
+        # "(*DAT_002f89c0)()": a function pointer the code calls (an optional hook)
+        for m in re.finditer(rf"\(\*{_G}\)\s*\(", text):
+            pointer_globals.add(m.group(1))
+            cast_votes[m.group(1)]["code *"] += 1
         for m in re.finditer(rf"(?<![\w)\]])\*\s*{_G}\b(?!\s*[\[(])", text):
             plain_deref.add(m.group(1))
         # "(float10)DAT_00311d48": a float label (for an integer one the decompiler shows (float10)(int)G)

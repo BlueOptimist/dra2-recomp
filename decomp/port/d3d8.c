@@ -1,15 +1,15 @@
-/* Direct3D 8 (Xbox) on Windows: the first part of the graphics layer.
+/* Direct3D 8 (Xbox) on Windows: the Xbox side of the graphics layer.
  *
  * Every function keeps the name, calling convention and parameter count of its prototype in build/program.h, so it
  * replaces the weak stub in xbox_stubs.c.
  *
  * The game manages its own framebuffers the Xbox way: it builds surface headers (XGSetSurfaceHeader), points them at
  * memory it allocated (D3D_AllocContiguousMemory + D3DResource_Register) and hands them to the device through the
- * present parameters. So this layer keeps the XDK's resource header layout and works on that memory directly:
- *   - Clear fills the render target's memory (software)
- *   - Swap copies the back buffer to a Win32 window with GDI and pumps window messages
- * Drawing (push buffers, vertex shaders, textures) is the next step; until then those calls stay stubs, so the window
- * shows whatever the game clears to.
+ * present parameters. This layer keeps the XDK's resource header layout for the game's sake, and renders through a
+ * Direct3D 9 device (port/gpu.c):
+ *   - Clear clears the Direct3D 9 back buffer and depth buffer
+ *   - Swap presents it and pumps window messages
+ * Drawing (push buffers, vertex shaders, textures) is the next step; until then those calls stay stubs.
  */
 #include "win32_min.h"
 
@@ -87,38 +87,12 @@ typedef struct {
 static unsigned char device_block[0x4000];  /* what the game gets as its device pointer; its contents are ours */
 static XPresentParameters present;
 static XSurface *render_target, *depth_target;
-static HWND window;
 static int frames;
 
-static LRESULT WINAPI window_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
-{
-    if (msg == WM_CLOSE || msg == WM_DESTROY)
-        ExitProcess(0);
-    return DefWindowProcA(hwnd, msg, wp, lp);
-}
-
-static void open_window(unsigned width, unsigned height)
-{
-    WNDCLASSA wc;
-    memset(&wc, 0, sizeof wc);
-    wc.lpfnWndProc = window_proc;
-    wc.hInstance = GetModuleHandleA(0);
-    wc.lpszClassName = "DRA2Window";
-    RegisterClassA(&wc);
-    RECT r = { 0, 0, (long)width * 2, (long)height * 2 };  /* 640x480 shown at 2x */
-    AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, 0);
-    window = CreateWindowExA(0, wc.lpszClassName, "Digimon Rumble Arena 2", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
-                             CW_USEDEFAULT, CW_USEDEFAULT, r.right - r.left, r.bottom - r.top, 0, 0, wc.hInstance, 0);
-}
-
-static void pump_messages(void)
-{
-    MSG msg;
-    while (PeekMessageA(&msg, 0, 0, 0, PM_REMOVE)) {
-        TranslateMessage(&msg);
-        DispatchMessageA(&msg);
-    }
-}
+/* port/gpu.c */
+int gpu_open(unsigned width, unsigned height);
+void gpu_clear(int count, const long *rects, unsigned flags, unsigned color, float z, unsigned stencil);
+void gpu_present(void);
 
 /* Direct3D_CreateDevice(adapter, device type, window, behaviour flags, present parameters, out device) */
 int __stdcall D3D8__Direct3D_CreateDevice(DWORD adapter, DWORD type, DWORD hwnd, DWORD flags,
@@ -133,8 +107,8 @@ int __stdcall D3D8__Direct3D_CreateDevice(DWORD adapter, DWORD type, DWORD hwnd,
            render_target ? surface_width(render_target) : 0, render_target ? surface_height(render_target) : 0,
            render_target ? surface_pitch(render_target) : 0, render_target ? surface_format(render_target) : 0,
            (void *)depth_target);
-    open_window(present.BackBufferWidth ? present.BackBufferWidth : 640,
-                present.BackBufferHeight ? present.BackBufferHeight : 480);
+    gpu_open(present.BackBufferWidth ? present.BackBufferWidth : 640,
+             present.BackBufferHeight ? present.BackBufferHeight : 480);
     *device = device_block;
     return 0;  /* D3D_OK */
 }
@@ -191,65 +165,20 @@ void __stdcall D3D8__D3DDevice_SetGammaRamp(unsigned char flags, unsigned char *
 /* SetTile: tiled (compressed) memory regions on the NV2A; the CPU sees the memory linear either way */
 void __stdcall D3D8__D3DDevice_SetTile(int index, int *tile) { (void)index, (void)tile; }
 
-/* ------------------------------------------------------------------------------- clear and present (CPU) -- */
-#define D3DCLEAR_TARGET 0x000000F0u  /* Xbox: R, G, B and A bits */
-
-typedef struct { long x1, y1, x2, y2; } XRect;
-
-static void fill(XSurface *s, long x1, long y1, long x2, long y2, DWORD color)
-{
-    if (!s || !s->Data)
-        return;
-    long w = (long)surface_width(s), h = (long)surface_height(s);
-    unsigned pitch = surface_pitch(s);
-    if (x1 < 0) x1 = 0;
-    if (y1 < 0) y1 = 0;
-    if (x2 > w) x2 = w;
-    if (y2 > h) y2 = h;
-    for (long y = y1; y < y2; y++) {
-        DWORD *row = (DWORD *)((unsigned char *)s->Data + y * pitch);
-        for (long x = x1; x < x2; x++)
-            row[x] = color;
-    }
-}
-
-/* Clear(count, rects, flags, color, z, stencil): colour only for now (32-bit targets) */
+/* ------------------------------------------------------------------------------------- clear and present -- */
+/* Clear(count, rects, flags, color, z, stencil): z arrives as the bits of a float. D3DRECT has the same layout on
+ * both sides (x1, y1, x2, y2). */
 void __stdcall D3D8__D3DDevice_Clear(int count, int *rects, unsigned flags, unsigned color, DWORD z, DWORD stencil)
 {
-    (void)z, (void)stencil;
-    if (!(flags & D3DCLEAR_TARGET) || !render_target)
-        return;
-    if (count <= 0 || !rects) {
-        fill(render_target, 0, 0, 0x7fffffff, 0x7fffffff, color);
-        return;
-    }
-    XRect *r = (XRect *)rects;
-    for (int i = 0; i < count; i++)
-        fill(render_target, r[i].x1, r[i].y1, r[i].x2, r[i].y2, color);
+    union { DWORD bits; float f; } depth = { z };
+    gpu_clear(count, (const long *)rects, flags, color, depth.f, stencil);
 }
 
-/* Swap(flags): show the back buffer. 32-bit A8R8G8B8 / X8R8G8B8 is what GDI calls a 32-bit BGRA DIB. */
+/* Swap(flags): present the frame */
 DWORD __stdcall D3D8__D3DDevice_Swap(unsigned flags)
 {
     (void)flags;
-    XSurface *s = present.BufferSurfaces[0];
-    if (window && s && s->Data) {
-        BITMAPINFO bmi;
-        memset(&bmi, 0, sizeof bmi);
-        bmi.bmiHeader.biSize = sizeof bmi.bmiHeader;
-        bmi.bmiHeader.biWidth = (long)(surface_pitch(s) / 4);
-        bmi.bmiHeader.biHeight = -(long)surface_height(s);  /* top-down */
-        bmi.bmiHeader.biPlanes = 1;
-        bmi.bmiHeader.biBitCount = 32;
-        bmi.bmiHeader.biCompression = BI_RGB;
-        RECT client;
-        GetClientRect(window, &client);
-        HDC dc = GetDC(window);
-        StretchDIBits(dc, 0, 0, client.right, client.bottom, 0, 0, (int)surface_width(s), (int)surface_height(s),
-                      (void *)s->Data, &bmi, DIB_RGB_COLORS, SRCCOPY);
-        ReleaseDC(window, dc);
-    }
-    pump_messages();
+    gpu_present();
     if (++frames == 1 || frames % 300 == 0)
         printf("[d3d] frame %d\n", frames);
     return 0;

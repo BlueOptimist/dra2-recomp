@@ -93,8 +93,10 @@ public class ApplyCrtSignatures extends GhidraScript {
 						params.add(new ParameterImpl(args[i].getName(), args[i].getDataType(),
 							storage(ps[i], args[i].getDataType().getLength()), currentProgram));
 					}
-					ReturnParameterImpl ret = new ReturnParameterImpl(fd.getReturnType(),
-						storage(retSpec, fd.getReturnType().getLength()), currentProgram);
+					// no "return=" part: a void function
+					ReturnParameterImpl ret = new ReturnParameterImpl(fd.getReturnType(), retSpec.isEmpty()
+						? VariableStorage.VOID_STORAGE : storage(retSpec, fd.getReturnType().getLength()),
+						currentProgram);
 					f.updateFunction(f.getCallingConventionName(), ret, params, FunctionUpdateType.CUSTOM_STORAGE,
 						true, SourceType.USER_DEFINED);
 					custom++;

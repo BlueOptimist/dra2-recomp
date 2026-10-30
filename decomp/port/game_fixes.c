@@ -38,3 +38,21 @@ void __thiscall Class_2a4888__vf00(MemberCallback *this, unsigned int param_1)
     }
     __3CNoTrackObject__SAXPAX_Z((int)this);
 }
+
+/* replaces 0013e8f0: std::sort of the resource-type registry, 0x10c-byte records { name[0x104], ..., create }
+ * ordered by name (unsigned bytes, as strcmp). The introsort's helpers take a record by value, built on the stack
+ * with "sub esp, 10Ch" and a string copy rather than pushed, and the decompiled callers don't pass it: the unguarded
+ * insert (FUN_0013c460, variadic, reading &stack0x00000008) and make_heap's call to FUN_0013d210 dropped the record.
+ * The sort copied garbage over 48 of the 51 types, so no scene node could be instantiated (every type lookup missed)
+ * and nothing was ever drawn. */
+typedef unsigned int size_t_;
+void qsort(void *base, size_t_ count, size_t_ size, int (*compare)(const void *, const void *));
+int strcmp(const char *a, const char *b);
+
+static int compare_type_names(const void *a, const void *b) { return strcmp((const char *)a, (const char *)b); }
+
+void FUN_0013e8f0(unsigned char *begin, unsigned char *end)
+{
+    if (begin != end)
+        qsort(begin, (size_t_)(end - begin) / 0x10c, 0x10c, compare_type_names);
+}

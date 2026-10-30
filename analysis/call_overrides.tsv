@@ -1,3 +1,4 @@
 call	convention	return	params	note
 001589aa	__thiscall	int	pointer,int	FUN_00158930: pool->vf03(size); the size push (edi) is shared with the other branch's vf00 call
 001589b1	__thiscall	int	pointer,int	FUN_00158930: pool->vf00(size); takes the same shared size push (edi) as the vf03 call at 001589aa
+000cc6de	__thiscall	void	pointer,int,float,float,float	MenuLegal::Setup: panel->vf13(6, position) with the position vector passed by value (sub esp,0Ch and three stores, no pushes), so the decompiler saw only the 6

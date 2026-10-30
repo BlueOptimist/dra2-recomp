@@ -32,17 +32,24 @@ def main():
     # register saves: pushes of callee-saved registers among a function's first instructions, before its first call
     # (an early-exit branch may come before them). They are never arguments, and arguments can't come before them.
     saves = set()
+    starts = set()  # instruction indexes of function entries
     for path in glob.glob(os.path.join(decomp, "src", "**", "*.c"), recursive=True):
         for start in re.findall(r"^// ([0-9a-f]{8}) \S+ \(\d+ bytes\)$", open(path, encoding="latin-1").read(), re.M):
             k = index.get(int(start, 16))
             if k is None:
                 continue
+            starts.add(k)
             for j in range(k, min(k + 32, len(insns))):
                 op, args = insns[j][1], insns[j][2]
                 if op == "calll":
                     break  # (an early-exit path with its own ret may come before the saves)
                 if op == "pushl" and args in SAVED:
                     saves.add(j)
+    # MSVC's exception-frame prologue: push -1; push handler; push fs:[0]; mov fs:[0], esp; then "push ecx" or
+    # "sub esp, N" for the locals. None of it is an argument (FUN_0016ff70's allocator call was given five).
+    for j, (_, op, args) in enumerate(insns):
+        if op == "movl" and args == "%esp, %fs:0x0" and j + 1 < len(insns) and insns[j + 1][1] in ("pushl", "subl"):
+            saves.add(j + 1)
     rows = []
     for k, (addr, op, args) in enumerate(insns):
         if op != "calll" or not args.startswith("*") or "%esp" in args:
@@ -52,16 +59,34 @@ def main():
         # arguments: the run of pushes right before the call. Only the object/target setup (mov, lea) may sit between
         # them; anything else ends the run, so pushes for an outer call or saved registers aren't counted (an
         # argument count that is too high is as harmful as a missing one)
+        # A struct or vector passed by value is not pushed: "sub esp, 0Ch" reserves its dwords and stores fill them
+        # (MenuLegal::Setup passes a position as three floats that way), so a small sub esp in the run counts too.
         pushes = 0
         j = k - 1
-        while j >= 0 and k - j <= 12:
+        while j >= 0 and k - j <= 20:
             jop, jargs = insns[j][1], insns[j][2]
+            if "%fs:" in jargs or j in saves and jop == "subl":
+                break  # the exception-frame setup (above)
             if jop == "pushl":
                 if j in saves:
                     break  # the function's own register saves (prologue)
                 pushes += 1
+            elif jop == "subl" and jargs.endswith(", %esp"):
+                m = re.match(r"\$0x([0-9a-f]+), %esp$", jargs)
+                if not m or int(m.group(1), 16) > 0x40 or int(m.group(1), 16) % 4 or \
+                        any(s in starts for s in range(j - 3, j + 1)) or \
+                        any(insns[i][1] in ("nop", "retl", "int3") for i in range(max(0, j - 3), j)):
+                    break  # the function's own frame (prologue, maybe of a start Ghidra doesn't list), or not args
+                # "sub esp, 0Ch; mov eax, esp; push eax; call": the area's address is this call's argument (it
+                # returns a vector there, as the by-value argument of an outer call), so it isn't this call's
+                copies = {a.split(", ")[1] for _, o, a in insns[j + 1:k]
+                          if (o == "movl" and a.startswith("%esp, %")) or (o == "leal" and "(%esp), %" in a)}
+                if any(o == "pushl" and a in copies for _, o, a in insns[j + 1:k]):
+                    break
+                pushes += int(m.group(1), 16) // 4
             elif jop not in ("movl", "leal", "movzbl", "movsbl", "movzwl", "movswl"):
-                break
+                break  # (float stores end the run too: past them, "push esi; push edi" can be MSVC's late register
+                # saves, which a run through x87 code took for two arguments in GameObject::UpdateFacing)
             j -= 1
         if not pushes or k + 1 >= len(insns):
             continue

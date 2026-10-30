@@ -22,7 +22,7 @@ def main():
     exe = os.path.join(build, "dra2.exe")
     cmd = [os.path.join(mingw_bin, "i686-w64-mingw32-clang.exe"), "-o", exe, *objs,
            "-Wl,--image-base=0x400000", "-Wl,--disable-dynamicbase", "-Wl,--error-limit=0", "-lm",
-           "-luser32", "-lgdi32"]
+           "-luser32", "-lgdi32", "-ld3d9"]
     proc = subprocess.run(cmd, capture_output=True, text=True, encoding="latin-1")
     out = proc.stdout + proc.stderr
     with open(os.path.join(build, "link_errors.txt"), "w", encoding="latin-1") as f:

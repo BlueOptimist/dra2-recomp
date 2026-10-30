@@ -17,9 +17,9 @@ void port_kernel_unimplemented(const char *name)
     abort();
 }
 
-/* 0x1d4ba0, the body of FatalErrorf (format, va_list): the engine's fatal-error report. The Xbox version formats the
- * message, calls an optional hook, appends it to t:\crashlog.txt and breaks into the debugger. Its decompiled body
- * doesn't compile yet (the hook is an untyped global), so this replaces the weak trap stub. */
+/* replaces 001d4ba0, the body of FatalErrorf (format, va_list): the engine's fatal-error report. The Xbox version
+ * formats the message, calls an optional hook, appends it to t:\crashlog.txt and breaks into the debugger. The port
+ * prints it with the call chain instead. */
 int vprintf(const char *format, char *args);
 
 void port_calls_recent(void);

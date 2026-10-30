@@ -30,6 +30,7 @@
 !/decomp/port/startup.c
 !/decomp/port/crash.c
 !/decomp/port/d3d8.c
+!/decomp/port/gpu.c
 !/decomp/port/calls.c
 !/decomp/port/game_fixes.c
 !/decomp/port/win32_min.h
