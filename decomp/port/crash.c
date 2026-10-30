@@ -66,9 +66,33 @@ void port_calls_report(int limit);
 void port_calls_recent(void);
 WINIMPORT DWORD WINAPI GetCurrentThreadId(void);
 
+/* DRA2_WATCHWRITE=addr[:off...] (same syntax as DRA2_WATCH; the last value read is the address to watch): once the
+ * pointer chain resolves, the sampler arms debug register DR0 on the game thread for 4-byte writes there, and each
+ * write is reported with the writing code's call chain ("[watch]" lines). For "who overwrote this object's vtable". */
+static DWORD watchw_addr, watchw_off[6];
+static int watchw_depth = -1, watchw_armed, watchw_hits;
+#define CTX_DR0 0x04
+#define CTX_DR6 0x14
+#define CTX_DR7 0x18
+#define CONTEXT_I386_DEBUG_REGISTERS 0x00010010
+
 static long WINAPI on_exception(EXCEPTION_POINTERS_32 *info)
 {
     DWORD code = info->record->ExceptionCode;
+    if (code == 0x80000004u && watchw_armed) {  /* EXCEPTION_SINGLE_STEP: the data breakpoint fired */
+        void *c = info->context;
+        if (watchw_hits++ < 8) {
+            DWORD addr = CTX_U32(c, CTX_DR0);
+            printf("[watch] write to %08lx, now %08lx\n", (unsigned long)addr,
+                   IsBadReadPtr((void *)addr, 4) ? 0ul : (unsigned long)*(DWORD *)addr);
+            DWORD chain[16];
+            int n = walk_chain(CTX_U32(c, CTX_EIP), (DWORD *)CTX_U32(c, CTX_EBP), chain, 16);
+            for (int k = 0; k < n; k++)
+                printf("[crash] frame %08lx\n", (unsigned long)chain[k]);
+        }
+        CTX_U32(c, CTX_DR6) = 0;
+        return -1; /* EXCEPTION_CONTINUE_EXECUTION */
+    }
     if (code < 0xC0000000u || code == 0xC0000409u /* abort(): already reported */)
         return 0; /* EXCEPTION_CONTINUE_SEARCH */
     if (sampler_thread_id && GetCurrentThreadId() == sampler_thread_id)
@@ -119,6 +143,7 @@ WINIMPORT BOOL WINAPI DuplicateHandle(HANDLE src_process, HANDLE src, HANDLE dst
 WINIMPORT DWORD WINAPI SuspendThread(HANDLE thread);
 WINIMPORT DWORD WINAPI ResumeThread(HANDLE thread);
 WINIMPORT BOOL WINAPI GetThreadContext(HANDLE thread, void *context);
+WINIMPORT BOOL WINAPI SetThreadContext(HANDLE thread, const void *context);
 #define DUPLICATE_SAME_ACCESS 2
 #define CONTEXT_I386_CONTROL_INTEGER 0x00010003
 
@@ -197,6 +222,30 @@ static DWORD WINAPI sampler(void *param)
         Sleep(sample_ms);
         if (SuspendThread(sampled_thread) == (DWORD)-1)
             return 0;
+        /* arm the write watchpoint once its pointer chain resolves (the thread is stopped, so its context can change) */
+        DWORD armed_at = 0;
+        if (watchw_depth >= 0 && !watchw_armed) {
+            DWORD *p = (DWORD *)watchw_addr;
+            int ok = 1;
+            for (int d = 0; d < watchw_depth && ok; d++) {
+                ok = !IsBadReadPtr(p, 4) && *p;
+                if (ok)
+                    p = (DWORD *)(*p + watchw_off[d]);
+            }
+            if (ok && !IsBadReadPtr(p, 4)) {
+                static __attribute__((aligned(16))) unsigned char dctx[0x2CC];
+                CTX_U32(dctx, 0) = CONTEXT_I386_DEBUG_REGISTERS;
+                if (GetThreadContext(sampled_thread, dctx)) {
+                    CTX_U32(dctx, CTX_DR0) = (DWORD)p;
+                    CTX_U32(dctx, CTX_DR7) = 1u | (1u << 16) | (3u << 18); /* L0, write, 4 bytes */
+                    CTX_U32(dctx, 0) = CONTEXT_I386_DEBUG_REGISTERS;
+                    if (SetThreadContext(sampled_thread, dctx)) {
+                        watchw_armed = 1;
+                        armed_at = (DWORD)p;
+                    }
+                }
+            }
+        }
         /* copy the chain while the thread is stopped, print after it runs again (it may hold the stdout lock) */
         DWORD chain[33];
         int count = 0;
@@ -204,6 +253,9 @@ static DWORD WINAPI sampler(void *param)
         if (GetThreadContext(sampled_thread, context))
             count = walk_chain(CTX_U32(context, CTX_EIP), (DWORD *)CTX_U32(context, CTX_EBP), chain, 33);
         ResumeThread(sampled_thread);
+        if (armed_at)
+            printf("[watch] armed: writes to %08lx (now %08lx)\n", (unsigned long)armed_at,
+                   (unsigned long)*(DWORD *)armed_at);
         printf("[sample] %d after %lu ms\n", n, (unsigned long)(n * sample_ms));
         for (int k = 0; k < count; k++)
             printf("[sample] frame %08lx\n", (unsigned long)chain[k]);
@@ -216,6 +268,19 @@ void port_install_crash_reporter(void)
 {
     AddVectoredExceptionHandler(1, on_exception);
     parse_watch();  /* printed with each sample and in a crash report */
+    static char ww[128];
+    DWORD wn = GetEnvironmentVariableA("DRA2_WATCHWRITE", ww, sizeof ww);
+    if (wn && wn < sizeof ww) {
+        const char *s = ww;
+        if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X'))
+            s += 2;
+        watchw_addr = parse_hex(&s);
+        watchw_depth = 0;
+        while (*s == ':' && watchw_depth < 6) {
+            s++;
+            watchw_off[watchw_depth++] = parse_hex(&s);
+        }
+    }
     char limit[12];
     DWORD ln = GetEnvironmentVariableA("DRA2_CALLS", limit, sizeof limit);
     if (ln && ln < sizeof limit) {

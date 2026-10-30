@@ -101,6 +101,10 @@ def main():
     TARGET = next((a.split("=", 1)[1] for a in sys.argv[3:] if a.startswith("--target=")), TARGET)
     # --instrument: the game's functions count their calls (port/calls.c; DRA2_SAMPLE prints what ran)
     instrument = ["-finstrument-functions"] if "--instrument" in sys.argv[3:] else []
+    # --pattern-init: every local starts filled with 0xAA bytes, so a read of uninitialised stack gives the same value
+    # on every run (a pointer read from one crashes at 0xAAAAAAAA) instead of whatever an earlier call left there
+    if "--pattern-init" in sys.argv[3:]:
+        instrument = instrument + ["-ftrivial-auto-var-init=pattern"]
     clang = os.path.join(llvm_bin, "clang.exe")
     llvm_nm = os.path.join(llvm_bin, "llvm-nm.exe")
     build = os.path.join(decomp, "build")
