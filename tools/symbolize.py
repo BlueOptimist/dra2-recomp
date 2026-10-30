@@ -22,6 +22,14 @@ def main():
             addrs.append(int(parts[0], 16))
             names.append(re.sub(r"@\d+$", "", parts[2].lstrip("_")))
     for line in text.splitlines():
+        rc = re.match(r"\[calls\] recent ([0-9a-fA-F]{8}) from ([0-9a-fA-F]{8})", line)
+        if rc:
+            def name_of(a):
+                i = bisect.bisect_right(addrs, a) - 1
+                return f"{names[i]}+{a - addrs[i]:#x}" if i >= 0 else "?"
+            fn, site = int(rc.group(1), 16), int(rc.group(2), 16)
+            print(f"  recent  {name_of(fn).split('+')[0]:<40} from {name_of(site)}")
+            continue
         c = re.match(r"\[calls\] fn ([0-9a-fA-F]{8}) (x\d+)", line)
         if c:
             a = int(c.group(1), 16)

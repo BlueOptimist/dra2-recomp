@@ -8,6 +8,8 @@ function's exact prototype (calling convention and parameters decide the decorat
   - Xbox API functions (D3D8__, DSOUND__, XAPILIB__, XGRAPHC__/XGRAPHICS__, and unnamed FUN_s in the XDK sections and
     lib/xapi) get a body that reports the call once through port_todo() and returns 0
   - Xbox API data and data labels inside the XDK sections get zero-filled storage
+  - game functions whose decompilation failed (DECOMPILE FAILED in src/) get the reporting body too, so the game
+    still links and the run says if one is reached
 Every definition is weak: a real implementation anywhere in decomp/port/ replaces it at link time, so the platform
 layer can be written one function at a time.
 """
@@ -57,10 +59,16 @@ def main():
         if m and m.group(2) not in protos:
             protos[m.group(2)] = line
 
+    # game functions the decompiler gave up on (a timeout): no body to compile, so they get the same reporting stub
+    failed = set()
+    for p in glob.glob(os.path.join(decomp, "src", "**", "*.c"), recursive=True):
+        failed |= {f"FUN_{a}" for a in re.findall(r"DECOMPILE FAILED: .*? decompiling ([0-9a-f]{8})",
+                                                  open(p, encoding="latin-1").read())}
+
     funcs, datas = [], []
     for name in still:
         api = API.match(name)
-        code = re.match(r"^(?:thunk_)?FUN_[0-9a-f]{8}$", name) and is_xdk_address(name)
+        code = re.match(r"^(?:thunk_)?FUN_[0-9a-f]{8}$", name) and (is_xdk_address(name) or name in failed)
         label = re.match(r"^_*(?:DAT|PTR|UNK)_[0-9a-f]{8}$", name) and is_xdk_address(name)
         if (api or code) and name in protos:
             funcs.append(name)

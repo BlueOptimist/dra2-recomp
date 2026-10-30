@@ -89,6 +89,10 @@ public class ExportDecomp extends GhidraScript {
 					for (Function f : chunk) {
 						monitor.checkCancelled();
 						DecompileResults r = di.decompileFunction(f, 60, monitor);
+						if (!r.decompileCompleted()) {
+							// a slow one (call-site overrides make some heavier): one more try with ten minutes
+							r = di.decompileFunction(f, 600, monitor);
+						}
 						String status;
 						out.println("// " + f.getEntryPoint() + " " + f.getName(true) + " (" + f.getBody().getNumAddresses() + " bytes)");
 						if (r.decompileCompleted() && r.getDecompiledFunction() != null) {

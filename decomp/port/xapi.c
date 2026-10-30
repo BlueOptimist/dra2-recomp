@@ -151,7 +151,20 @@ void *__stdcall FUN_001294c8(void) { return GetProcessHeap(); }
 /* FUN_0012ae24: RtlAllocateHeap(heap, flags, size), reached through LocalAlloc */
 void *__stdcall FUN_0012ae24(void *heap, DWORD flags, DWORD size) { return HeapAlloc(heap, flags, size); }
 
-unsigned char __stdcall XAPILIB__HeapFree(void *heap, DWORD flags, void *mem) { return HeapFree(heap, flags, mem) != 0; }
+/* A pointer the heap doesn't own (another allocator's memory, a block freed twice) makes Windows stop the process
+ * with "heap corruption"; it is reported and skipped instead, so the bad free can be found. */
+WINIMPORT BOOL WINAPI HeapValidate(HANDLE heap, DWORD flags, const void *mem);
+
+unsigned char __stdcall XAPILIB__HeapFree(void *heap, DWORD flags, void *mem)
+{
+    if (mem && !HeapValidate(heap, 0, mem)) {
+        static int reported;
+        if (reported++ < 8)
+            printf("[xapi] HeapFree(%p): not a live block of this heap, skipped\n", mem);
+        return 0;
+    }
+    return HeapFree(heap, flags, mem) != 0;
+}
 
 /* Contiguous physical memory for the GPU. On Windows plain committed memory does; VirtualAlloc's 64 KB alignment
  * covers every alignment the XDK allows. */

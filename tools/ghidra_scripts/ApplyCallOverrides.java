@@ -4,7 +4,7 @@
 // only, so the other call shows no argument and the method read a garbage size.
 // Reads analysis/call_overrides.tsv: call instruction address, calling convention, return type, parameter types
 // (comma separated; for __thiscall the first one is "this", in ECX), note. Types are builtin names: int, uint,
-// void, pointer.
+// void, pointer, undefined4 (a 4-byte value of unknown type: a float stays a bit copy).
 // Args: <call_overrides.tsv>
 // @category Digimon
 import java.io.BufferedReader;
@@ -20,6 +20,7 @@ import ghidra.program.model.data.IntegerDataType;
 import ghidra.program.model.data.ParameterDefinition;
 import ghidra.program.model.data.ParameterDefinitionImpl;
 import ghidra.program.model.data.PointerDataType;
+import ghidra.program.model.data.Undefined4DataType;
 import ghidra.program.model.data.UnsignedIntegerDataType;
 import ghidra.program.model.data.VoidDataType;
 import ghidra.program.model.listing.Function;
@@ -31,6 +32,7 @@ public class ApplyCallOverrides extends GhidraScript {
 			case "void": return VoidDataType.dataType;
 			case "uint": return UnsignedIntegerDataType.dataType;
 			case "pointer": return PointerDataType.dataType;
+			case "undefined4": return Undefined4DataType.dataType;
 			default: return IntegerDataType.dataType;
 		}
 	}

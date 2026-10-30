@@ -12,9 +12,17 @@ typedef struct { void *fn; unsigned count, reported; } CallSlot;
 static CallSlot slots[CALL_SLOTS];
 static volatile int any_calls;
 
+/* the last function entries (function, call site), for the crash report: what ran just before a crash whose stack
+ * chain is lost (inside the C runtime, or after a stack overwrite) */
+#define RECENT 48
+static void *recent_fn[RECENT], *recent_site[RECENT];
+static unsigned recent_next;
+
 __attribute__((no_instrument_function)) void __cyg_profile_func_enter(void *fn, void *site)
 {
-    (void)site;
+    unsigned r = recent_next++ % RECENT;
+    recent_fn[r] = fn;
+    recent_site[r] = site;
     unsigned h = ((unsigned)fn >> 4) * 2654435761u >> 16;
     for (unsigned k = 0; k < CALL_SLOTS; k++) {
         CallSlot *s = &slots[(h + k) & (CALL_SLOTS - 1)];
@@ -32,6 +40,18 @@ __attribute__((no_instrument_function)) void __cyg_profile_func_enter(void *fn, 
 }
 
 __attribute__((no_instrument_function)) void __cyg_profile_func_exit(void *fn, void *site) { (void)fn, (void)site; }
+
+/* the last function entries, oldest first ("[calls] recent" lines: function, then the call site) */
+__attribute__((no_instrument_function)) void port_calls_recent(void)
+{
+    if (!any_calls)
+        return;
+    unsigned n = recent_next < RECENT ? recent_next : RECENT;
+    for (unsigned k = 0; k < n; k++) {
+        unsigned r = (recent_next - n + k) % RECENT;
+        printf("[calls] recent %08x from %08x\n", (unsigned)recent_fn[r], (unsigned)recent_site[r]);
+    }
+}
 
 /* the functions called since the last report, the `limit` most called first */
 __attribute__((no_instrument_function)) void port_calls_report(int limit)

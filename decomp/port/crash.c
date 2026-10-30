@@ -63,6 +63,7 @@ static void parse_watch(void);
 static DWORD sampler_thread_id;
 static int calls_limit = 80;  /* DRA2_CALLS=<n>: how many functions each "[calls]" report lists */
 void port_calls_report(int limit);
+void port_calls_recent(void);
 WINIMPORT DWORD WINAPI GetCurrentThreadId(void);
 
 static long WINAPI on_exception(EXCEPTION_POINTERS_32 *info)
@@ -91,11 +92,12 @@ static long WINAPI on_exception(EXCEPTION_POINTERS_32 *info)
            CTX_U32(c, CTX_ESI), CTX_U32(c, CTX_EDI), CTX_U32(c, CTX_EBP), CTX_U32(c, CTX_ESP));
     /* the top of the stack: after a call through a null pointer, [esp] is the return address into the caller */
     DWORD *esp = (DWORD *)CTX_U32(c, CTX_ESP);
-    for (int k = 0; k < 12 && !IsBadReadPtr(esp + k, 4); k++)
+    for (int k = 0; k < 64 && !IsBadReadPtr(esp + k, 4); k++)  /* deep enough to get past C runtime frames */
         printf("[crash] stack %08lx\n", (unsigned long)esp[k]);
     print_chain("crash", CTX_U32(c, CTX_EIP), (DWORD *)CTX_U32(c, CTX_EBP));
     print_watches();
-    port_calls_report(calls_limit);  /* with an -Instrument build: what ran since the last sample */
+    port_calls_recent();             /* with an -Instrument build: the last function entries */
+    port_calls_report(calls_limit);  /* ... and what ran since the last sample */
     return 0;
 }
 

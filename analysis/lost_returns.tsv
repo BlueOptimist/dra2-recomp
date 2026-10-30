@@ -345,6 +345,8 @@ address	name	return	uses
 00136d80	FUN_00136d80	undefined4	3
 0013a100	FUN_0013a100	undefined4	4
 0013a130	FUN_0013a130	undefined4	1
+0013b3b0	FUN_0013b3b0	undefined4	1
+0013b4e0	FUN_0013b4e0	undefined4	1
 0013c020	FUN_0013c020	undefined4	4
 0013c1d0	FUN_0013c1d0	undefined4	2
 0013cd60	FUN_0013cd60	undefined4	2
@@ -583,4 +585,3 @@ address	name	return	uses
 0026711b	DSOUND::IDirectSoundBuffer_SetCurrentPosition	undefined4	1
 00268e26	DSOUND::IDirectSoundBuffer_SetMixBins	undefined4	3
 0026a2e4	DSOUND::IDirectSound_CreateSoundBuffer	undefined4	1
-0013b4e0	FUN_0013b4e0	undefined4	1

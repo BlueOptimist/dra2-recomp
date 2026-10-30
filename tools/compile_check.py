@@ -1086,9 +1086,15 @@ def main():
         views |= set(re.findall(rf"\((?:int|uint)\)\s*{_G}\b", func))
         return views & scaled
 
+    # "*(int *)(G + 4)": a cast dereference of an offset label is a byte offset (for an int * the decompiler would
+    # print G[1]), whatever type the label got here. Declared int *, C read G + 0x10.
+    cast_offset = re.compile(r"(\*\s*\([^()]*\*\s*\)\s*\(\s*)(" + "|".join(map(re.escape, sorted(scaled))) +
+                             r")(\s*[+-]\s*)") if scaled else None
     for p in pp_files:
         text = open(p, encoding="latin-1").read()
         new = arrow_ref.sub(lambda mm: f"(({arrow_types[mm.group(1)]} *){mm.group(1)})->", text) if arrow_ref else text
+        if cast_offset:
+            new = cast_offset.sub(r"\1(int)\2\3", new)
         parts = re.split(r"(?m)(^// [0-9a-f]{8} .*$)", new)
         for k in range(2, len(parts), 2):
             views = integer_view(parts[k])
