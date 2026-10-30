@@ -106,6 +106,20 @@ def main():
                 if s == "{":
                     break
 
+    # Thunks (a lone "jmp rel32": MenuLegal's ProcessInput slot is jmp MenuScreen::ProcessInput) aren't exported, so a
+    # code pointer to one has no symbol: it points at the jump's target instead, through up to three jumps
+    t_va, t_size, t_bytes = secs[".text"]
+
+    def code_symbol(addr):
+        for _ in range(4):
+            if addr in func_raw:
+                return func_raw[addr]
+            off = addr - t_va
+            if not (0 <= off < t_size - 5) or t_bytes[off] != 0xE9:
+                return None
+            addr = addr + 5 + struct.unpack_from("<i", t_bytes, off + 1)[0]
+        return None
+
     # labels Ghidra knows in data, by name (for names without an address: luakey_*, X_vftable)
     label_addr = {}
     for r in csv.DictReader(open(os.path.join(analysis, "data_symbols.tsv")), delimiter="\t"):
@@ -234,9 +248,9 @@ def main():
             if ptr is not None and off + 4 <= len(raw) and not any(off + k in label_set for k in (1, 2, 3)) \
                     and struct.unpack_from("<I", raw, off)[0] == ptr:
                 flush()
-                if ptr in func_raw:
-                    asm.append(f"\t.long {func_raw[ptr]}")
-                    stats["code pointers relocated"] += 1
+                if code_symbol(ptr):
+                    asm.append(f"\t.long {code_symbol(ptr)}")
+                    stats["code pointers relocated" if ptr in func_raw else "code pointers to thunks, relocated"] += 1
                 elif section_of(ptr):
                     tsec = section_of(ptr)
                     asm.append(f"\t.long Lxbe_{tsec.strip('.')}+{ptr - secs[tsec][0]}")
