@@ -39,6 +39,11 @@ def main():
     with open(out, "w") as f:
         f.write("address\n" + "".join(a + "\n" for a in ecx))
     print(f"stack-convention functions reading ECX (-> __thiscall): {len(ecx)}")
+    # __thiscall functions that still read in_ECX: their "this" parameter is missing (AddThisParam.java)
+    missing_this = sorted(a for a, rs in fn_regs.items() if "ECX" in rs and conv[a] == "thiscall")
+    with open(os.path.join(os.path.dirname(out), "missing_this.tsv"), "w") as f:
+        f.write("address\n" + "".join(a + "\n" for a in missing_this))
+    print(f"__thiscall functions without a this parameter (-> AddThisParam): {len(missing_this)}")
     # EAX/EDX inputs: no standard convention passes them; AddRegisterParams.java adds them as explicit parameters
     regs_out = os.path.join(os.path.dirname(out), "register_params.tsv")
     rows = sorted((a, ",".join(r for r in ("EAX", "EDX") if r in rs)) for a, rs in fn_regs.items()

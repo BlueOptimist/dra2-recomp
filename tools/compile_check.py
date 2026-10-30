@@ -635,6 +635,53 @@ def slot_calls(line, counter=None):
     return "".join(out) + line[pos:]
 
 
+SLOT0 = re.compile(r"\(\*\(code \*\)\*\*\(\w+ \*\*\)")
+
+
+def slot0_calls(line, counter=None):
+    """Calls through the first vtable slot, (*(code *)**(undefined4 **)obj)(args): the same __thiscall rewrite as
+    vcall_this (an array of objects destroyed through slot 0, the deleting destructor, ran with no "this")."""
+    counter = counter if counter is not None else [0]
+    out, pos = [], 0
+    for m in SLOT0.finditer(line):
+        if m.start() < pos:
+            continue
+        j = m.end()
+        if line[j:j + 1] == "(":
+            k = matching_paren(line, j)
+            if k < 0:
+                continue
+            obj, after = line[j + 1:k], k + 1
+        else:
+            om = re.match(r"\w+", line[j:])
+            if not om:
+                continue
+            obj, after = om.group(0), j + om.end()
+        if line[after:after + 2] != ")(":
+            continue
+        end = matching_paren(line, after + 1)
+        if end < 0:
+            continue
+        args = line[after + 2:end].strip()
+        arg_list = [a.strip() for a in split_top(args, ",")] if args else []
+
+        def bare(e):
+            e = re.sub(r"\(\s*[A-Za-z_][\w ]*\**\s*\)", "", e).strip()
+            while e.startswith("(") and e.endswith(")") and matching_paren(e, 0) == len(e) - 1:
+                e = e[1:-1].strip()
+            return e
+        if arg_list and bare(arg_list[0]) == bare(obj):
+            arg_list = arg_list[1:]
+        counter[0] += 1
+        t = f"slot0_{counter[0]}"
+        types = ", ".join(["void *"] + ["int" if "({" in a else f"__typeof__({a})" for a in arg_list])
+        call_args = ", ".join([t] + arg_list)
+        out.append(line[pos:m.start()] + f"({{ void *{t} = (void *)({obj}); "
+                   f"((int (__thiscall *)({types}))**(code ***){t})({call_args}); }})")
+        pos = end + 1
+    return "".join(out) + line[pos:]
+
+
 def fix_pseudo_storage(lines, class_methods):
     """Give Ghidra's pseudo-variables real storage, function by function:
     - stack0xNNNNNNNN (a stack slot relative to the stack pointer at entry): positive offsets are the incoming
@@ -850,6 +897,8 @@ def preprocess(src, dst, class_methods=None):
             line = vcall_this(line)
         if "->vftable->slot" in line:
             line = slot_calls(line)
+        if "(*(code *)**(" in line:
+            line = slot0_calls(line)
         # "*(int *)(&DAT_0031fa00 + iVar7)": the decompiler adds a byte offset to an untyped label (for a typed one
         # it would index, (&G)[i]); declared with a wider type, C scaled the offset
         line = re.sub(r"(\*\s*\([^()]*\*\s*\)\s*\(\s*)&(_?(?:DAT|PTR)_[0-9a-f]{8})(\s*[+-])",

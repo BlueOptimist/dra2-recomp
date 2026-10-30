@@ -148,8 +148,111 @@ void __stdcall XAPILIB__GlobalMemoryStatus(MEMORYSTATUS *status) { GlobalMemoryS
 /* FUN_001294c8: GetProcessHeap (returns XAPI's heap handle) */
 void *__stdcall FUN_001294c8(void) { return GetProcessHeap(); }
 
+/* Every block gets 16 bytes of slack after it. With DRA2_HEAPCHECK=1 they are guard bytes, and each block is tracked
+ * with the game function that asked for it. Guards are checked when a block is freed and, every 256 heap calls, across all live blocks: the first one
+ * found overwritten is reported ("[heap] ..." with the allocating call site, for tools/symbolize.py). Windows only
+ * notices heap damage much later ("heap corruption" inside some unrelated call). */
+#define GUARD 16
+#define GUARD_BYTE 0xFD
+#define TRACKED (1 << 18)
+typedef struct { unsigned char *p; DWORD size; void *site[3]; void *freed_at[2]; } Tracked;
+#define FREED_BYTE 0xDD
+static Tracked tracked[TRACKED];
+static int heapcheck = -1, heap_ops, guard_reported;
+
+static int heapcheck_on(void)
+{
+    if (heapcheck < 0) {
+        char v[4];
+        heapcheck = GetEnvironmentVariableA("DRA2_HEAPCHECK", v, sizeof v) > 0;
+    }
+    return heapcheck;
+}
+
+static Tracked *slot_of(void *p, int insert)
+{
+    unsigned h = ((unsigned)p >> 3) * 2654435761u >> 14;
+    for (unsigned k = 0; k < TRACKED; k++) {
+        Tracked *t = &tracked[(h + k) & (TRACKED - 1)];
+        if (t->p == p)
+            return t;
+        if (!t->p)
+            return insert ? t : 0;
+    }
+    return 0;
+}
+
+static int guard_ok(const Tracked *t)
+{
+    for (int i = 0; i < GUARD; i++)
+        if (t->p[t->size + i] != GUARD_BYTE)
+            return 0;
+    return 1;
+}
+
+static void report_guard(const Tracked *t, const char *when)
+{
+    if (guard_reported++ < 4)
+        printf("[heap] block %p (%lu bytes) written past its end, found %s\n[crash] frame %08lx\n"
+               "[crash] frame %08lx\n[crash] frame %08lx\n", (void *)t->p, (unsigned long)t->size, when,
+               (unsigned long)t->site[0], (unsigned long)t->site[1], (unsigned long)t->site[2]);
+}
+
+/* a freed block (kept, not returned to Windows, while checking) that something wrote to afterwards */
+static void check_freed(Tracked *t)
+{
+    for (DWORD i = 0; i < t->size; i++)
+        if (t->p[i] != FREED_BYTE) {
+            if (guard_reported++ < 4)
+                printf("[heap] block %p (%lu bytes) written at +%lu after it was freed\n[crash] frame %08lx\n"
+                       "[crash] frame %08lx\n[crash] frame %08lx\n[heap] freed from\n[crash] frame %08lx\n"
+                       "[crash] frame %08lx\n", (void *)t->p, (unsigned long)t->size, (unsigned long)i,
+                       (unsigned long)t->site[0], (unsigned long)t->site[1], (unsigned long)t->site[2],
+                       (unsigned long)t->freed_at[0], (unsigned long)t->freed_at[1]);
+            for (DWORD j = 0; j < t->size; j++)
+                t->p[j] = FREED_BYTE;  /* report each block once per write */
+            return;
+        }
+}
+
+static void check_all(void)
+{
+    for (unsigned k = 0; k < TRACKED; k++) {
+        Tracked *t = &tracked[k];
+        if (!t->p || t->p == (unsigned char *)1)
+            continue;
+        if (!guard_ok(t))
+            report_guard(t, "in a sweep");
+        if (t->freed_at[0])
+            check_freed(t);
+    }
+}
+
 /* FUN_0012ae24: RtlAllocateHeap(heap, flags, size), reached through LocalAlloc */
-void *__stdcall FUN_0012ae24(void *heap, DWORD flags, DWORD size) { return HeapAlloc(heap, flags, size); }
+void *__stdcall FUN_0012ae24(void *heap, DWORD flags, DWORD size)
+{
+    /* Always 16 bytes of slack: the game writes a little past some blocks, which the Xbox heap's rounding absorbed
+     * and Windows' heap reports as corruption much later (inside CreateDirectoryA). */
+    if (!heapcheck_on())
+        return HeapAlloc(heap, flags, size + GUARD);
+    unsigned char *p = HeapAlloc(heap, flags, size + GUARD);
+    if (p) {
+        for (int i = 0; i < GUARD; i++)
+            p[size + i] = GUARD_BYTE;
+        Tracked *t = slot_of(p, 1);
+        if (t) {
+            t->p = p;
+            t->size = size;
+            /* the allocating game code, up through LocalAlloc / malloc / operator new (frames exist at -O0) */
+            t->site[0] = __builtin_return_address(1);
+            t->site[1] = __builtin_return_address(2);
+            t->site[2] = __builtin_return_address(3);
+        }
+    }
+    if (++heap_ops % 256 == 0)
+        check_all();
+    return p;
+}
 
 /* A pointer the heap doesn't own (another allocator's memory, a block freed twice) makes Windows stop the process
  * with "heap corruption"; it is reported and skipped instead, so the bad free can be found. */
@@ -162,6 +265,28 @@ unsigned char __stdcall XAPILIB__HeapFree(void *heap, DWORD flags, void *mem)
         if (reported++ < 8)
             printf("[xapi] HeapFree(%p): not a live block of this heap, skipped\n", mem);
         return 0;
+    }
+    if (mem && heapcheck_on()) {
+        Tracked *t = slot_of(mem, 0);
+        if (t && t->freed_at[0]) {
+            static int twice;
+            if (twice++ < 4)
+                printf("[heap] block %p freed twice\n", mem);
+            return 1;
+        }
+        if (t) {
+            if (!guard_ok(t))
+                report_guard(t, "when it was freed");
+            /* kept in quarantine, filled, so a later write to it is caught (never returned to Windows) */
+            for (DWORD i = 0; i < t->size; i++)
+                t->p[i] = FREED_BYTE;
+            t->freed_at[0] = __builtin_return_address(1);
+            t->freed_at[1] = __builtin_return_address(2);
+        }
+        if (++heap_ops % 256 == 0)
+            check_all();
+        if (t)
+            return 1;
     }
     return HeapFree(heap, flags, mem) != 0;
 }

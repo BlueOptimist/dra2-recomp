@@ -361,7 +361,15 @@ Drawing (push buffers, shaders, textures) is the next part. With the device in p
 
 **Where it stands now.**
 - **What runs:** the boot loads `levels/menu_black.res` and `lua.res` completely through the game's own streaming reader (open, header, data and relocation reads, completion callbacks). It initialises DirectSound (still stubs), then builds the menu and runs its screens' update loop.
-- **Where it stops:** the first menu screen sets up (models, text, sound effects) and updates. The state machine then changes state (`FUN_0011a3a0`) and tears the screen down (`Screen::vf14`). The teardown crashes in `Class_2a7928::dtor` (a write through null).
+- **Where it stops:** a heap-corruption bug that depends on memory layout.
+  - **With `DRA2_HEAPCHECK=1`** (guards and quarantine): the first menu screen sets up, updates and is torn down, and the game builds the legal screen (`MenuLegal`). Its resource load then fails ("couldn't allocate data area").
+  - **Without it**: the process heap is reported corrupted ("heap corruption", `0xC0000374`), at a different point depending on the build. In one build, before 16-byte slack was added to every block, the game had reached its first draw call (`FUN_00115ff0` → `MenuScreen::vf10` → `D3DDevice_SetRenderState_Simple`).
+  - **What's ruled out:** the guard and quarantine checks report no write past the end of a game heap block and no write into a freed one.
+  - **Suspects:** an underrun, or a write into memory the C runtime allocated (`malloc`/`_strdup`, same process heap, not tracked).
+- **Other fixes this round:**
+  - The first menu's teardown works: an array of objects destroyed through vtable slot 0 had no `this` (`slot0_calls`, 10 sites).
+  - 98 `__thiscall` methods whose custom storage had lost `this` get it back in ECX (`AddThisParam.java`, listed by `find_register_inputs.py` in `analysis/missing_this.tsv`).
+- **Heap checking:** `DRA2_HEAPCHECK=1` (`port/xapi.c`) puts 16 guard bytes after every block of the game's heap and tracks each block with three levels of its allocating call site. Freed blocks are kept in quarantine filled with `0xDD`. Every 256 heap calls, and on each free, guards and quarantined blocks are checked. A write past a block's end, a write after free, or a double free is reported with the allocation and free sites (`[heap]` lines; the `[crash] frame` lines under them are symbolized). Without it, every block still gets 16 bytes of slack.
 - **Debugging:** with `-Instrument`, the crash report also lists the last 48 function entries and their call sites. That's how the caller of a crash inside the C runtime (`vsnprintf`) was found.
 - **Not done yet:** nothing has been drawn, because no screen has reached its draw call and `Swap`. The present parameters `CreateDevice` receives still read 0×0 with a 4096×4096 surface, which needs checking.
 

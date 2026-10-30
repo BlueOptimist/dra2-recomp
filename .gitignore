@@ -56,3 +56,4 @@
 !/analysis/indirect_pops.tsv
 !/analysis/stack_params.tsv
 !/analysis/narrow_params.tsv
+!/analysis/missing_this.tsv
