@@ -51,3 +51,4 @@
 !/analysis/varargs.tsv
 !/analysis/call_overrides.tsv
 !/analysis/fixed_signatures.tsv
+!/analysis/false_register_params.tsv

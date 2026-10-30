@@ -587,6 +587,54 @@ def vcall_this(line, counter=None):
     return "".join(out) + line[pos:]
 
 
+SLOT_CALL = re.compile(r"\((?:\(code \*\)\s*|\*\s*)")
+
+
+def slot_calls(line, counter=None):
+    """Calls through a typed vtable slot, ((code *)obj->vftable->slot03_1de00f)() or
+    (*obj->vftable->slot13_094170)(obj): the methods are __thiscall, but the first form passes no "this" and the
+    second passes it on the stack (the slot's C type lists it as a parameter). Both become __thiscall calls with the
+    object in ECX, read once; a leading copy of the object among the arguments is dropped."""
+    counter = counter if counter is not None else [0]
+    out, pos = [], 0
+    for m in SLOT_CALL.finditer(line):
+        if m.start() < pos:
+            continue
+        open_ = m.start()
+        close = matching_paren(line, open_)
+        if close < 0 or line[close + 1:close + 2] != "(":
+            continue
+        target = line[m.end():close].strip()
+        tm = re.fullmatch(r"(.+)->vftable->(slot\w+)", target)
+        if not tm:
+            continue
+        obj = tm.group(1).strip()
+        if obj.count("(") != obj.count(")"):
+            continue
+        end = matching_paren(line, close + 1)
+        if end < 0:
+            continue
+        args = line[close + 2:end].strip()
+        arg_list = [a.strip() for a in split_top(args, ",")] if args else []
+
+        def bare(e):
+            e = re.sub(r"\(\s*[A-Za-z_][\w ]*\**\s*\)", "", e).strip()
+            while e.startswith("(") and e.endswith(")") and matching_paren(e, 0) == len(e) - 1:
+                e = e[1:-1].strip()
+            return e
+        if arg_list and bare(arg_list[0]) == bare(obj):
+            arg_list = arg_list[1:]
+        counter[0] += 1
+        t = f"slot_{counter[0]}"
+        types = ", ".join(["void *"] + ["int" if "({" in a else f"__typeof__({a})" for a in arg_list])
+        call_args = ", ".join([t] + arg_list)
+        out.append(line[pos:open_] + f"({{ void *{t} = (void *)({obj}); "
+                   f"((int (__thiscall *)({types}))(((__typeof__({obj}))({t}))->vftable->{tm.group(2)}))"
+                   f"({call_args}); }})")
+        pos = end + 1
+    return "".join(out) + line[pos:]
+
+
 def fix_pseudo_storage(lines, class_methods):
     """Give Ghidra's pseudo-variables real storage, function by function:
     - stack0xNNNNNNNN (a stack slot relative to the stack pointer at entry): positive offsets are the incoming
@@ -755,8 +803,16 @@ def fix_pseudo_storage(lines, class_methods):
         for name, (t, off) in in_stack.items():
             frame_vars[name] = (t, off, None)
         frame_ref = re.compile(r"(?<![\w.>])(" + "|".join(map(re.escape, frame_vars)) + r")\b") if frame_vars else None
+        # "while (X = Y, cond) { ...; Y = X; }": the decompiler's copy between two names for one value. When the
+        # loop also writes X through its address (&X: bytes copied into it one at a time), the copy at the top of
+        # each iteration undid those writes; Y still takes X at the end of the iteration, so the copy goes.
+        alias_copies = [(mm.group(1), mm.group(2)) for mm in re.finditer(r"while \((\w+) = (\w+), ", text)
+                        if re.search(rf"&{re.escape(mm.group(1))}\b", text)]
+
         new_body = []
         for line in body:
+            for x, y in alias_copies:
+                line = line.replace(f"while ({x} = {y}, ", "while (")
             if float_scalars or float_pointers:
                 line = float_bits(line, float_scalars, float_pointers)
             if frame_ref:
@@ -792,6 +848,8 @@ def preprocess(src, dst, class_methods=None):
         line = re.sub(r"\bNAN\b(?!\s*\()", '__builtin_nanf("")', line)
         if VCALL in line:
             line = vcall_this(line)
+        if "->vftable->slot" in line:
+            line = slot_calls(line)
         # "*(int *)(&DAT_0031fa00 + iVar7)": the decompiler adds a byte offset to an untyped label (for a typed one
         # it would index, (&G)[i]); declared with a wider type, C scaled the offset
         line = re.sub(r"(\*\s*\([^()]*\*\s*\)\s*\(\s*)&(_?(?:DAT|PTR)_[0-9a-f]{8})(\s*[+-])",
