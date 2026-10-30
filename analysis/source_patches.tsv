@@ -1,2 +1,4 @@
 address	old	new	reason
 000a2250	FUN_001a1e70((undefined4 *)&local_48,	FUN_001a1e70((undefined4 *)local_40,	game_main: the display settings struct. FUN_001a4020 initialises it through local_40 (lea ecx,[esp+64h] after push ebx), FUN_001a1e70 copies it from the same address (lea ecx,[esp+78h] with 16 more bytes pushed: __controlfp's 8 are cleaned up later); the decompiler's stack depth is 8 bytes off between them, so it named the second local_48 and the copy started 8 bytes early (first field never set)
+001cb740	*(undefined4 *)(extraout_EDX	*(undefined4 *)((int)param_1	matrix helper: mov edx,[esp+4]; push edx; call 1cb670 (which leaves EDX alone); then stores through EDX = param_1. The decompiler assumes the call clobbers EDX (extraout_EDX)
+001cb770	*(undefined4 *)(extraout_EDX	*(undefined4 *)((int)param_2	matrix helper, same as 1cb740: EDX holds param_2 across the call to 1cb670

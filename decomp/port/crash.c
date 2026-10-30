@@ -71,6 +71,16 @@ WINIMPORT DWORD WINAPI GetCurrentThreadId(void);
  * write is reported with the writing code's call chain ("[watch]" lines). For "who overwrote this object's vtable". */
 static DWORD watchw_addr, watchw_off[6];
 static int watchw_depth = -1, watchw_armed, watchw_hits;
+
+/* the allocator's DRA2_WATCHALLOC hook (port/xapi.c): watch writes to the first word of this block (the sampler
+ * arms it within one sample period) */
+void port_watch_write(DWORD addr)
+{
+    watchw_addr = addr;
+    watchw_depth = 0;
+    watchw_armed = 0;
+    printf("[watch] block %08lx will be watched\n", (unsigned long)addr);
+}
 #define CTX_DR0 0x04
 #define CTX_DR6 0x14
 #define CTX_DR7 0x18
@@ -81,10 +91,13 @@ static long WINAPI on_exception(EXCEPTION_POINTERS_32 *info)
     DWORD code = info->record->ExceptionCode;
     if (code == 0x80000004u && watchw_armed) {  /* EXCEPTION_SINGLE_STEP: the data breakpoint fired */
         void *c = info->context;
-        if (watchw_hits++ < 8) {
+        if (watchw_hits++ < 32) {
             DWORD addr = CTX_U32(c, CTX_DR0);
             printf("[watch] write to %08lx, now %08lx\n", (unsigned long)addr,
                    IsBadReadPtr((void *)addr, 4) ? 0ul : (unsigned long)*(DWORD *)addr);
+            DWORD *fr = (DWORD *)CTX_U32(c, CTX_EBP);  /* the writer's first stack arguments, [ebp+8]... */
+            if (!IsBadReadPtr(fr, 24))
+                printf("[watch] writer's arguments %08lx %08lx %08lx %08lx\n", fr[2], fr[3], fr[4], fr[5]);
             DWORD chain[16];
             int n = walk_chain(CTX_U32(c, CTX_EIP), (DWORD *)CTX_U32(c, CTX_EBP), chain, 16);
             for (int k = 0; k < n; k++)

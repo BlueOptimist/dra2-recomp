@@ -5,4 +5,4 @@ address	signature	storage	evidence
 000c9920	long long __stdcall FUN_000c9920(int param_1);		reads [esp+4] only, every exit is ret 4
 0013b4e0	unsigned int __cdecl FUN_0013b4e0(void *self, int value, float param_2, unsigned int flags);	params=ECX,EAX,stack+4,stack+8;return=EAX	this in ECX and an input in EAX (mov [ebp+54h], eax before any write), flags at [entry+8] (test bl, 8), plain ret: the caller cleans
 00199865	undefined4 __cdecl FUN_00199865(undefined4 param_1, ...);		printf-style wrapper: passes &stack0x00000008 (after its one named parameter) on, find_varargs.py
-0013d210	void __cdecl FUN_0013d210(int param_1, int param_2, int param_3, ...);		printf-style wrapper: passes &stack0x00000010 on (three named parameters); variadic, so the caller cleans up
+0013d210	void __cdecl FUN_0013d210(int param_1, int param_2, int param_3);		not printf-style: sorts records passed by value (a 0x104-byte name at &param_4, then two dwords read at entry+0x114/0x118); the record's stack parameters are added by AddStackParams (stack_params.tsv)

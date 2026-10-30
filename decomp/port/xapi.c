@@ -239,12 +239,46 @@ static void check_all(void)
 }
 
 /* FUN_0012ae24: RtlAllocateHeap(heap, flags, size), reached through LocalAlloc */
+/* DRA2_WATCHALLOC=<size hex>[,<n>]: the n-th (default first) block of that size is handed to the write watchpoint
+ * (port/crash.c, needs DRA2_SAMPLE): "who overwrote this object" when the object is reached only at run time */
+void port_watch_write(DWORD addr);
+static DWORD watchalloc_size, watchalloc_nth = 1, watchalloc_seen;
+static int watchalloc_read;
+
+static void watchalloc_check(void *p, DWORD size)
+{
+    if (!watchalloc_read) {
+        watchalloc_read = 1;
+        char v[32];
+        DWORD n = GetEnvironmentVariableA("DRA2_WATCHALLOC", v, sizeof v);
+        if (n && n < sizeof v) {
+            const char *s = v;
+            for (; *s && *s != ','; s++) {
+                char ch = *s;
+                watchalloc_size = watchalloc_size * 16 +
+                                  (ch >= '0' && ch <= '9' ? ch - '0' : (ch | 0x20) - 'a' + 10);
+            }
+            if (*s == ',') {
+                watchalloc_nth = 0;
+                for (s++; *s >= '0' && *s <= '9'; s++)
+                    watchalloc_nth = watchalloc_nth * 10 + (DWORD)(*s - '0');
+            }
+        }
+    }
+    if (watchalloc_size && size == watchalloc_size && ++watchalloc_seen == watchalloc_nth)
+        port_watch_write((DWORD)p);
+}
+
 void *__stdcall FUN_0012ae24(void *heap, DWORD flags, DWORD size)
 {
     /* Always 16 bytes of slack: the game writes a little past some blocks, which the Xbox heap's rounding absorbed
      * and Windows' heap reports as corruption much later (inside CreateDirectoryA). */
-    if (!heapcheck_on())
-        return HeapAlloc(heap, flags, size + GUARD);
+    if (!heapcheck_on()) {
+        void *p = HeapAlloc(heap, flags, size + GUARD);
+        if (p)
+            watchalloc_check(p, size);
+        return p;
+    }
     unsigned char *p = HeapAlloc(heap, flags, size + GUARD);
     if (p) {
         for (int i = 0; i < GUARD; i++)
