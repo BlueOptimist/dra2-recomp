@@ -22,11 +22,19 @@ void port_kernel_unimplemented(const char *name)
  * doesn't compile yet (the hook is an untyped global), so this replaces the weak trap stub. */
 int vprintf(const char *format, char *args);
 
+void port_calls_recent(void);
+void port_calls_report(int limit);
+void port_print_chain(const char *tag);
+
 void FUN_001d4ba0(char *format, char *args)
 {
     printf("[game] FATAL ERROR: ");
     vprintf(format, args);
     printf("\n");
+    port_print_chain("fatal");
+    /* with an -Instrument build: what led here (abort() is not a crash, so the crash report doesn't run) */
+    port_calls_recent();
+    port_calls_report(8000);
     abort();
 }
 

@@ -58,6 +58,12 @@ static void print_chain(const char *tag, DWORD eip, DWORD *ebp)
         printf("[%s] frame %08lx\n", tag, (unsigned long)chain[k]);
 }
 
+/* the caller's call chain, for reports that aren't exceptions (FatalErrorf) */
+void port_print_chain(const char *tag)
+{
+    print_chain(tag, (DWORD)__builtin_return_address(0), (DWORD *)__builtin_frame_address(0));
+}
+
 static void print_watches(void);
 static void parse_watch(void);
 static DWORD sampler_thread_id;

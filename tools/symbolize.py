@@ -36,7 +36,7 @@ def main():
             i = bisect.bisect_right(addrs, a) - 1
             print(f"  {c.group(2):>8}  {names[i] if i >= 0 else '?'}")
             continue
-        m = re.match(r"\[(?:crash|sample)\] (?:frame|stack) ([0-9a-fA-F]{8})", line)
+        m = re.match(r"\[(?:crash|sample|fatal)\] (?:frame|stack) ([0-9a-fA-F]{8})", line)
         if m and " stack " in line[:16]:
             a = int(m.group(1), 16)
             i = bisect.bisect_right(addrs, a) - 1

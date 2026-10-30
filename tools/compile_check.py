@@ -14,12 +14,14 @@ For every decomp/src/**/*.c file:
 Writes decomp/build/compile_report.tsv (address, name, errors, first error) and updates the status column of
 decomp/functions.tsv for game/engine code: 'compiles' or 'errors'. Also checks the format struct sizes.
 """
+import ast
 import collections
 import concurrent.futures
 import csv
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 
@@ -899,6 +901,54 @@ def fix_pseudo_storage(lines, class_methods):
     return out
 
 
+XBE_DATA = {}  # virtual address -> byte, for .rdata and .data (load_xbe_data)
+STRLEN_START = re.compile(r'^(\s+)(\w+) = ("(?:[^"\\]|\\.)*");\s*$')
+
+
+def load_xbe_data(decomp):
+    path = os.path.join(decomp, "..", "extracted", "default.xbe")
+    if not os.path.exists(path):
+        return
+    data = open(path, "rb").read()
+    base, = struct.unpack_from("<I", data, 0x104)
+    n, sect = struct.unpack_from("<II", data, 0x11C)
+    for i in range(n):
+        _, va, _, raw, rsize, name_va = struct.unpack_from("<IIIIII", data, sect - base + i * 56)
+        name = data[name_va - base:data.index(b"\0", name_va - base)]
+        if name in (b".rdata", b".data"):
+            XBE_DATA[va] = (va + rsize, data[raw:raw + rsize])
+
+
+def xbe_bytes(addr, n):
+    for va, (end, raw) in XBE_DATA.items():
+        if va <= addr and addr + n <= end:
+            return raw[addr - va:addr + n - va]
+    return None
+
+
+def fix_inlined_strlen(lines):
+    """An inlined strlen over a string the game keeps in .rdata: the decompiler shows the scan as starting at a C
+    literal ('p = "none"; do { ... } while (*q != 0);') but the code around it uses the end pointer with the string's
+    image address ('assign(&DAT_0029424b, q)', 'q + -0x2943f8' for the length). In the port the literal and the label
+    are different objects, so the range spans whatever lies between them (an empty std::string came out -72508 bytes
+    long). When a nearby line names a label whose bytes are exactly the literal, the scan starts at that label."""
+    for i, line in enumerate(lines):
+        m = STRLEN_START.match(line)
+        if not m or i + 1 >= len(lines) or lines[i + 1].strip() != "do {":
+            continue
+        try:
+            text = ast.literal_eval(m.group(3)).encode("latin-1") + b"\0"
+        except (ValueError, SyntaxError, UnicodeEncodeError):
+            continue
+        for later in lines[i + 2:i + 14]:
+            hit = next((a for a in re.findall(r"&DAT_([0-9a-f]{8})\b", later)
+                        if xbe_bytes(int(a, 16), len(text)) == text), None)
+            if hit:
+                lines[i] = f"{m.group(1)}{m.group(2)} = (char *)&DAT_{hit};\n"
+                break
+    return lines
+
+
 def preprocess(src, dst, class_methods=None):
     out = []
     for line in open(src, encoding="latin-1"):
@@ -917,6 +967,9 @@ def preprocess(src, dst, class_methods=None):
             line = slot_calls(line)
         if "(*(code *)**(" in line:
             line = slot0_calls(line)
+        # "(**(code **)(*DAT_00310114 + 0x14))(...)": a virtual call through a global object pointer, the vtable word
+        # read with the global's type; declared as a pointer to a class struct, "*G + 0x14" would add to a struct
+        line = re.sub(r"\(\*\*\(code \*\*\)\(\*(_?(?:DAT|PTR)_[0-9a-f]{8}) \+", r"(**(code **)(*(int *)\1 +", line)
         # "*(int *)(&DAT_0031fa00 + iVar7)": the decompiler adds a byte offset to an untyped label (for a typed one
         # it would index, (&G)[i]); declared with a wider type, C scaled the offset
         line = re.sub(r"(\*\s*\([^()]*\*\s*\)\s*\(\s*)&(_?(?:DAT|PTR)_[0-9a-f]{8})(\s*[+-])",
@@ -942,6 +995,7 @@ def preprocess(src, dst, class_methods=None):
         line = PARTIAL.sub(lambda m: f"(*({PARTIAL_TYPES.get(m.group(3), 'unsigned int')} *)"
                                      f"((char *)&{m.group(1)} + {m.group(2)}))", line)
         out.append(VTABLE_REF.sub(r"&\1_data", QUALIFIED.sub(r"\1__\2", line)))
+    out = fix_inlined_strlen(out)
     out = fix_float_pointer_casts(out)
     if class_methods is not None:
         out = fix_pseudo_storage(out, class_methods)
@@ -985,6 +1039,7 @@ def main():
         raise SystemExit("build/program.h missing: run ExportHeader.java first")
     program_text = open(program_h, encoding="latin-1").read()
     load_source_patches(decomp)
+    load_xbe_data(decomp)
 
     # format struct sizes
     check = os.path.join(build, "format_sizes.c")
@@ -1085,6 +1140,10 @@ def main():
             indexed_globals.add(m.group(1))
         for m in re.finditer(rf"\b{_G}\s*->", text):
             arrow_globals.add(m.group(1))
+        # the same through a rewritten virtual call (slot_calls): "((__typeof__(G))(slot_1))->vftable->..."
+        for m in re.finditer(rf"\(__typeof__\({_G}\)\)\(\w+\)\)->", text):
+            arrow_globals.add(m.group(1))
+            pointer_globals.add(m.group(1))
         for m in re.finditer(rf"(?<![\w)\]])\*\s*{_G}\b(?!\s*[\[(])", text):
             plain_deref.add(m.group(1))
         # "(float10)DAT_00311d48": a float label (for an integer one the decompiler shows (float10)(int)G)
