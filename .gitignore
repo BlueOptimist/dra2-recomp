@@ -31,6 +31,9 @@
 !/decomp/port/crash.c
 !/decomp/port/d3d8.c
 !/decomp/port/gpu.c
+!/decomp/port/nv2a.c
+!/decomp/port/nv2a.h
+!/decomp/port/pushbuffer.c
 !/decomp/port/calls.c
 !/decomp/port/game_fixes.c
 !/decomp/port/win32_min.h
@@ -55,6 +58,7 @@
 !/analysis/false_register_params.tsv
 !/analysis/purge_mismatches.tsv
 !/analysis/indirect_pops.tsv
+!/analysis/fp_conversions.tsv
 !/analysis/stack_params.tsv
 !/analysis/narrow_params.tsv
 !/analysis/missing_this.tsv

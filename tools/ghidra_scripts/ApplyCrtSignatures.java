@@ -78,12 +78,16 @@ public class ApplyCrtSignatures extends GhidraScript {
 				applied++;
 				if (c.length > 2 && !c[2].isEmpty()) {
 					String paramSpec = "", retSpec = "";
+					int purge = -1;  // "purge=N": the bytes the function pops (ret N), which custom storage can't imply
 					for (String part : c[2].split(";")) {
 						if (part.startsWith("params=")) {
 							paramSpec = part.substring(7);
 						}
 						else if (part.startsWith("return=")) {
 							retSpec = part.substring(7);
+						}
+						else if (part.startsWith("purge=")) {
+							purge = Integer.parseInt(part.substring(6));
 						}
 					}
 					String[] ps = paramSpec.isEmpty() ? new String[0] : paramSpec.split(",");
@@ -99,6 +103,9 @@ public class ApplyCrtSignatures extends GhidraScript {
 						currentProgram);
 					f.updateFunction(f.getCallingConventionName(), ret, params, FunctionUpdateType.CUSTOM_STORAGE,
 						true, SourceType.USER_DEFINED);
+					if (purge >= 0) {
+						f.setStackPurgeSize(purge);
+					}
 					custom++;
 				}
 				println(c[0] + " " + f.getCallingConventionName() + " " + f.getSignature().getPrototypeString() +

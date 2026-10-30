@@ -22,6 +22,23 @@ static inline void ghidra_store(void *p, unsigned long long v, int n)
     for (int i = 0; i < n; i++, v >>= 8)
         b[i] = (unsigned char)v;
 }
+/* "x = 0x3f800000;": the decompiler writes float constants as decimals, so a hex constant stored into a float is the
+ * float's bits (1.0f), not the integer 1065353216. compile_check.py routes such stores through ghidra_set_bits, which
+ * picks by the target's type (_Generic doesn't evaluate it): floats get the bits, everything else the integer. */
+static inline float ghidra_bits_float(unsigned b)
+{
+    union { unsigned u; float f; } x = { b };
+    return x.f;
+}
+/* and the other way, for a float stored where the decompiler keeps raw 32 bits (tools/implicit_bits.py) */
+static inline unsigned ghidra_float_bits(float f)
+{
+    union { float f; unsigned u; } x = { f };
+    return x.u;
+}
+#define ghidra_set_bits(lvalue, bits) \
+    ((lvalue) = _Generic((lvalue), float: ghidra_bits_float(bits), double: (double)ghidra_bits_float(bits), \
+                         default: (bits)))
 typedef unsigned int undefined4;
 typedef unsigned long long undefined6;
 typedef unsigned long long undefined8;

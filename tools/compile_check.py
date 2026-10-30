@@ -25,6 +25,9 @@ import struct
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # (run with -I: the script's folder isn't on the path)
+import implicit_bits  # noqa: E402
+
 QUALIFIED = re.compile(r"\b([A-Za-z_]\w*)::(~?[A-Za-z_]\w*)")
 FUNC_HEADER = re.compile(r"^// ([0-9a-f]{8}) (\S+) \(\d+ bytes\)$")
 GLOBAL_ID = re.compile(r"\b((?:DAT|PTR|LAB|s|u|switchD|caseD|UNK|BYTE|WORD|DWORD|QWORD|FLOAT|DOUBLE|TEXT|"
@@ -540,6 +543,12 @@ def split_top(s, sep):
     return parts + [cur]
 
 
+def return_type(before):
+    """A virtual call's return type: the decompiler marks an x87 (ST0) result by casting the call, "(float10)(...)".
+    Typed int, the C call read EAX instead: 83 calls, among them the camera's field of view (the projection went NaN)."""
+    return "float" if re.search(r"\((?:float10|float|double)\)\s*$", before) else "int"
+
+
 def vcall_this(line, counter=None):
     """Virtual calls on objects of unknown type, (**(code **)(*obj + 8))(args), lose their "this": MSVC passes it in
     ECX and Ghidra doesn't show it. They become __thiscall calls with the object as "this", read once:
@@ -586,7 +595,7 @@ def vcall_this(line, counter=None):
         types = ", ".join(["void *"] + ["int" if "({" in a else f"__typeof__({a})" for a in arg_list])
         call_args = ", ".join([t] + arg_list)
         out.append(line[pos:i] + f"({{ void *{t} = (void *)({obj}); "
-                   f"((int (__thiscall *)({types}))*(code **)(*(int *){t} + ({slot})))({call_args}); }})")
+                   f"(({return_type(line[:i])} (__thiscall *)({types}))*(code **)(*(int *){t} + ({slot})))({call_args}); }})")
         pos = end + 1
     return "".join(out) + line[pos:]
 
@@ -633,7 +642,7 @@ def slot_calls(line, counter=None):
         types = ", ".join(["void *"] + ["int" if "({" in a else f"__typeof__({a})" for a in arg_list])
         call_args = ", ".join([t] + arg_list)
         out.append(line[pos:open_] + f"({{ void *{t} = (void *)({obj}); "
-                   f"((int (__thiscall *)({types}))(((__typeof__({obj}))({t}))->vftable->{tm.group(2)}))"
+                   f"(({return_type(line[:open_])} (__thiscall *)({types}))(((__typeof__({obj}))({t}))->vftable->{tm.group(2)}))"
                    f"({call_args}); }})")
         pos = end + 1
     return "".join(out) + line[pos:]
@@ -681,7 +690,7 @@ def slot0_calls(line, counter=None):
         types = ", ".join(["void *"] + ["int" if "({" in a else f"__typeof__({a})" for a in arg_list])
         call_args = ", ".join([t] + arg_list)
         out.append(line[pos:m.start()] + f"({{ void *{t} = (void *)({obj}); "
-                   f"((int (__thiscall *)({types}))**(code ***){t})({call_args}); }})")
+                   f"(({return_type(line[:m.start()])} (__thiscall *)({types}))**(code ***){t})({call_args}); }})")
         pos = end + 1
     return "".join(out) + line[pos:]
 
@@ -903,8 +912,73 @@ def fix_pseudo_storage(lines, class_methods):
     return out
 
 
+# a whole-statement store of a hex constant: "pfVar3[0xf] = 0x3f800000;" (see ghidra_set_bits in ghidra_types.h).
+# The target must be an lvalue expression, not a declaration or a compound assignment.
+HEX_STORE = re.compile(r"^(\s+)(?!(?:if|else|while|for|do|return|switch|case)\b)"
+                       r"((?:\*|\(|[A-Za-z_])[^;=]*?[\w\])])\s*=\s*(0x[0-9a-f]{8})\s*;[ \t]*$", re.M)
+
 XBE_DATA = {}  # virtual address -> byte, for .rdata and .data (load_xbe_data)
 STRLEN_START = re.compile(r'^(\s+)(\w+) = ("(?:[^"\\]|\\.)*");\s*$')
+
+
+PROTO_LINE = re.compile(r"\b([A-Za-z_]\w*)\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)\s*;\s*$")
+HEX_ARG = re.compile(r"0x[0-9a-f]{5,8}")
+
+
+def rewrite_float_args(pp_files, prototypes):
+    """FUN_001a3910(..., 0x3de147ae, ...): a float argument the decompiler shows as its bits (a constant pushed as
+    an integer). Passed to a float parameter, C converts the integer: the projection's near plane became 1.04e9.
+    Such arguments become ghidra_bits_float(0x...). Returns how many were rewritten."""
+    float_params = {}
+    for line in prototypes.splitlines():
+        m = PROTO_LINE.search(line.strip())
+        if not m:
+            continue
+        params = split_top(m.group(2), ",")
+        pos = {i for i, p in enumerate(params)
+               if "*" not in p and re.match(r"\s*(?:const\s+)?(float|double|float10)\b", p)}
+        if pos:
+            float_params.setdefault(m.group(1), pos)
+    if not float_params:
+        return 0
+    call = re.compile(r"\b(" + "|".join(map(re.escape, float_params)) + r")\(")
+    total = 0
+    for path in pp_files:
+        text = open(path, encoding="latin-1").read()
+        out, pos, changed = [], 0, 0
+        for m in call.finditer(text):
+            if m.start() < pos:
+                continue
+            open_ = m.end() - 1
+            close = matching_paren(text, open_)
+            if close < 0 or "\n" in text[open_:close] and text[open_:close].count("\n") > 8:
+                continue
+            args = split_top(text[open_ + 1:close], ",")
+            new = []
+            for i, a in enumerate(args):
+                if i in float_params[m.group(1)] and HEX_ARG.fullmatch(a.strip()):
+                    new.append(f"ghidra_bits_float({a.strip()})")
+                    changed += 1
+                else:
+                    new.append(a)
+            out.append(text[pos:open_ + 1] + ",".join(new) + ")")
+            pos = close + 1
+        if changed:
+            with open(path, "w", encoding="latin-1") as f:
+                f.write("".join(out) + text[pos:])
+            total += changed
+    return total
+
+
+FUNCTION_ADDRESSES = {}  # function name -> address, from analysis/data_symbols.tsv
+
+
+def load_function_addresses(decomp):
+    path = os.path.join(decomp, "..", "analysis", "data_symbols.tsv")
+    if os.path.exists(path):
+        for row in csv.DictReader(open(path), delimiter="\t"):
+            if row.get("kind") == "function" and re.fullmatch(r"[0-9a-f]{8}", row["address"]):
+                FUNCTION_ADDRESSES.setdefault(row["name"], int(row["address"], 16))
 
 
 def load_xbe_data(decomp):
@@ -951,9 +1025,32 @@ def fix_inlined_strlen(lines):
     return lines
 
 
+CODE_CALL = re.compile(r"\(\*\*?\(code \*\*?\)")
+
+
+def join_wrapped_calls(lines):
+    """Ghidra wraps long statements; a call through a code pointer split as "(**(code **)(*p + 0x5c))" / "(args);"
+    escaped the virtual-call rewrites, which work a line at a time, and ran without its "this" (332 calls)."""
+    out, i = [], 0
+    while i < len(lines):
+        line = lines[i]
+        if CODE_CALL.search(line) and not line.rstrip().endswith((";", "{", "}")):
+            j = i + 1
+            while j < len(lines) and j - i < 16 and not line.rstrip().endswith((";", "{", "}")):
+                nxt = lines[j].strip()
+                line = line.rstrip() + ("" if nxt.startswith("(") else " ") + nxt + "\n"
+                j += 1
+            out.append(line)
+            i = j
+            continue
+        out.append(line)
+        i += 1
+    return out
+
+
 def preprocess(src, dst, class_methods=None):
     out = []
-    for line in open(src, encoding="latin-1"):
+    for line in join_wrapped_calls(open(src, encoding="latin-1").readlines()):
         if line.startswith("#include"):
             line = '#include "program_types.h"\n#include "protos.h"\n#include "globals.h"\n'
         # 10-byte x87 values (returns, locals, casts) are floating point; float10 is what the code does with them
@@ -963,6 +1060,12 @@ def preprocess(src, dst, class_methods=None):
         line = SWITCH_LINE.sub(r"\1switch((int)(\2)) {", line)
         line = CASE_FLOAT.sub(r"case \1:", CASE_POINTER.sub(r"case \1:", line))
         line = re.sub(r"\bNAN\b(?!\s*\()", '__builtin_nanf("")', line)
+        # SetRenderState_Simple's first argument is an NV2A method header, (count << 18) | method: 0x4035c reads like
+        # a code address, so the decompiler names whatever function starts there (FUN_0004035c, thunk_FUN_0003d050
+        # at 0x40354). The port's copy of that function lives elsewhere: the argument is the number itself.
+        line = re.sub(r"(SetRenderState_Simple\(\s*)([A-Za-z_]\w*)(\s*,)",
+                      lambda m: m.group(1) + (f"0x{FUNCTION_ADDRESSES[m.group(2)]:x}"
+                                              if m.group(2) in FUNCTION_ADDRESSES else m.group(2)) + m.group(3), line)
         if VCALL in line:
             line = vcall_this(line)
         if "->vftable->" in line:
@@ -998,6 +1101,7 @@ def preprocess(src, dst, class_methods=None):
                                      f"((char *)&{m.group(1)} + {m.group(2)}))", line)
         out.append(VTABLE_REF.sub(r"&\1_data", QUALIFIED.sub(r"\1__\2", line)))
     out = fix_inlined_strlen(out)
+    out = [HEX_STORE.sub(r"\1ghidra_set_bits(\2, \3);", line) for line in out]
     out = fix_float_pointer_casts(out)
     if class_methods is not None:
         out = fix_pseudo_storage(out, class_methods)
@@ -1042,6 +1146,7 @@ def main():
     program_text = open(program_h, encoding="latin-1").read()
     load_source_patches(decomp)
     load_xbe_data(decomp)
+    load_function_addresses(decomp)
 
     # format struct sizes
     check = os.path.join(build, "format_sizes.c")
@@ -1102,6 +1207,8 @@ def main():
         f.write("/* Generated by tools/compile_check.py: prototypes taken from the decompiled definitions. */\n")
         f.write("#pragma once\n" + "\n".join(protos.values()) + "\n")
     defined = set(re.findall(r"\b([A-Za-z_]\w*)\s*\(", program_text)) | set(protos)
+    print("hex float constants passed as float arguments:",
+          rewrite_float_args(pp_files, "\n".join(protos.values()) + "\n" + "\n".join(kept)))
 
     # globals the code uses as pointers (one pass over all files), and the pointer type the decompiler gives each
     pointer_globals = set()
@@ -1152,8 +1259,9 @@ def main():
             cast_votes[m.group(1)]["code *"] += 1
         for m in re.finditer(rf"(?<![\w)\]])\*\s*{_G}\b(?!\s*[\[(])", text):
             plain_deref.add(m.group(1))
-        # "(float10)DAT_00311d48": a float label (for an integer one the decompiler shows (float10)(int)G)
-        for m in re.finditer(rf"\((?:float10|float|double)\)\s*{_G}\b(?!\s*[\[(])", text):
+        # "(float10)DAT_00311d48": a float label, loaded onto the x87 stack (fld dword). "(float)G" is the decompiler
+        # converting an integer (fild): the screen width DAT_00311c3c, taken for a float, made every viewport 0x0.
+        for m in re.finditer(rf"\(float10\)\s*{_G}\b(?!\s*[\[(])", text):
             float_globals.add(m.group(1))
         # ... unless an integer-only operator uses it too (DAT_002f42fc % 900: a frame counter)
         for m in re.finditer(rf"(?<![\w.>*&]){_G}\s*(?:%|<<|>>|\+\+|--|[&|^](?![&|=]))|"
@@ -1173,10 +1281,15 @@ def main():
             # "piVar3 = G;" with "int *piVar3;": G holds an int * (a vote like a cast)
             pointer_locals = dict((n, re.sub(r"\s+", " ", t).strip() + " " + s) for t, s, n in
                                   re.findall(r"^\s+([A-Za-z_][\w ]*?)\s*(\*+)\s*(\w+)\s*;", func, re.M))
+            int_locals = set(re.findall(r"^\s+(?:int|uint)\s+(\w+)\s*;", func, re.M))
             for m in re.finditer(rf"^\s+(\w+)\s*=\s*{_G}\s*;", func, re.M):
                 t = pointer_locals.get(m.group(1))
                 if t:
                     cast_votes[m.group(2)][t] += 1
+                # "iVar2 = DAT_00311c5c;" into an int: an integer label, whatever "(float)G" says elsewhere (the
+                # viewport offset was declared float, and its integer add became a float one)
+                if m.group(1) in int_locals:
+                    int_globals.add(m.group(2))
             wide_locals = dict((n, t) for t, n in re.findall(rf"^\s+({WIDE_TYPES})\s+(\w+)\s*;", func, re.M))
             for m in re.finditer(rf"(?<![\w.>*&]){_G}\s*=\s*(\w+)\s*([(;])", func):
                 t = wide_returns.get(m.group(2)) if m.group(3) == "(" else wide_locals.get(m.group(2))
@@ -1311,6 +1424,13 @@ def main():
         casts = sum(pool.map(lambda p: fix_cast_errors(p, clang, [build, decomp], pointer_globals | typed_pointers),
                              pp_files))
     print("lines rewritten from clang error positions (casts, calls, pointer globals as numbers):", casts)
+
+    # integer <-> float "conversions" that are bit copies (tools/implicit_bits.py, analysis/fp_conversions.tsv)
+    ast_flags = [f for f in CLANG_FLAGS if f != "-fsyntax-only"] + ["-fsyntax-only", f"-I{build}", f"-I{decomp}"]
+    fp_table = implicit_bits.load_fp_table(os.path.join(decomp, "..", "analysis", "fp_conversions.tsv"))
+    with concurrent.futures.ThreadPoolExecutor(jobs) as pool:
+        bits = sum(pool.map(lambda p: implicit_bits.rewrite(p, clang, ast_flags, fp_table), pp_files))
+    print("integer/float conversions that are bit copies (spelled out):", bits)
 
     results = {}
     with concurrent.futures.ThreadPoolExecutor(jobs) as pool:

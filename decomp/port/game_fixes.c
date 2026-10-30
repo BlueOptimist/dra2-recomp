@@ -56,3 +56,16 @@ void FUN_0013e8f0(unsigned char *begin, unsigned char *end)
     if (begin != end)
         qsort(begin, (size_t_)(end - begin) / 0x10c, 0x10c, compare_type_names);
 }
+
+/* replaces 00130831: 4x4 matrix product out = a * b (row-major, Direct3D order), written with SSE in the original
+ * (movaps/shufps/mulps: each row of a broadcast against the rows of b). out may not alias a or b. */
+float *FUN_00130831(float *out, float *a, float *b)
+{
+    float r[16];
+    for (int i = 0; i < 4; i++)
+        for (int j = 0; j < 4; j++)
+            r[i * 4 + j] = a[i * 4] * b[j] + a[i * 4 + 1] * b[4 + j] + a[i * 4 + 2] * b[8 + j] + a[i * 4 + 3] * b[12 + j];
+    for (int i = 0; i < 16; i++)
+        out[i] = r[i];
+    return out;
+}

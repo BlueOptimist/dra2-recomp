@@ -397,7 +397,37 @@ Drawing (push buffers, shaders, textures) is the next part. With the device in p
       - The NV2A register-combiner encoder (FUN_001a8870), which returns its results through EBX/EDI: custom storage in `fixed_signatures.tsv` (`ApplyCrtSignatures.java` now accepts void returns).
       - `compile_check.py` types a label that the code calls (`(*G)()`) as `code *`, and globals reached only through rewritten slot calls as pointers.
   - **Where it stands:** the legal screen's object is instantiated and drawn every frame through its full path, with no crash in a 30 s run. Nothing visible yet, because the draw calls are still stubs. What the menu's draws call, in order: `SetTexture`, `XGSetTextureHeader`, `SetPixelShaderProgram` (NV2A register combiners), `CreateVertexShader` / `LoadVertexShaderProgram` / `SelectVertexShader` with `SetVertexShaderConstantNotInline` (vertex shader microcode), and `XGSetVertexBufferHeader`, `XGSetPushBufferHeader`, `SetStreamSource`, `RunPushBuffer` (the models are pre-built NV2A push buffers in the resource files). Those are the next steps: textures, then a push-buffer interpreter feeding Direct3D 9, then the shaders.
-  - **Known issue:** only the `-PatternInit` build runs clean. The plain build crashes in `Class_2a83b0::vf05` (its object's field at +0x40 reads 0 halfway through), so some local is read before it's written somewhere on that path.
+  - **Known issue:** only the `-PatternInit` build runs clean. The plain build crashes in `Class_2a83b0::vf05` (its object's field at +0x40 reads 0 halfway through), so some local is read before it's written somewhere on that path. (Found since: a wrapped virtual call ran without "this", below.)
+- **Drawing, second part: the draw path, and geometry on screen.**
+  - **The NV2A on the CPU.**
+    - `port/nv2a.c` is an interpreter for the GPU's vertex program microcode: MAC and ILU ops, swizzles, masks, a0 relative addressing and the 192 constants.
+    - `port/pushbuffer.c` decodes push-buffer methods: BEGIN_END, ARRAY_ELEMENT16/32, DRAW_ARRAYS, INLINE_ARRAY, vertex array formats, program and constant loads, and render states. It fetches each vertex's attributes, runs the program, and hands the results to Direct3D 9 as pretransformed vertices. The XDK compiles every shader to end with the viewport scale (c-38/c-37, which `SetViewport` sets), so the outputs are already screen coordinates.
+    - `d3d8.c` implements the Xbox entry points the menu uses:
+      - vertex shader objects (the declaration decides which stream and offset feed each register) and program loading;
+      - constants, streams, `RunPushBuffer`;
+      - draws from user memory (pretransformed FVF, or through the program);
+      - `SetRenderState_Simple` (one NV2A method) and the texture headers.
+    - `gpu.c` decodes Xbox textures (swizzled and linear formats, DXT passed through) and maps the NV2A blend, alpha and depth states.
+    - Debug switches:
+      - `DRA2_SNAPSHOT=<frame>,<path.bmp>` saves the back buffer;
+      - `DRA2_FLAT=1` draws everything in solid magenta with depth, blending and textures off.
+  - **Where it stands:** the legal screen's quad reaches the screen at the right place and depth for the screen's whole lifetime (`DRA2_FLAT=1`). Its texturing isn't right yet:
+    - The program reads texture coordinates through a texture matrix (c33..c36) that the material now leaves unset. It used to be garbage; now it's an identity the game skips. Next: how the game picks the vertex program for a material: a list of `(feature, stage)` pairs built with FUN_001a4f70, and a program cache.
+    - The pixel side is still "texture times diffuse": the register combiners (`SetPixelShaderProgram`) aren't translated yet.
+  - **Integer/float bit copies** (`tools/implicit_bits.py`, `tools/find_fp_conversions.py`, `analysis/fp_conversions.tsv`). The decompiler prints a reinterpretation of 32 bits and a numeric conversion the same way, `(float)x` or a plain assignment, and C converts. So the bits of 1.0f became 1065353216.0f in every matrix, and a viewport rect read through an `int *` came out 1.1e9 wide. compile_check reads clang's AST of each file and rewrites a conversion as `ghidra_bits_float(x)` / `ghidra_float_bits(x)` when:
+    - it is an implicit conversion between `undefined4` and a float (Ghidra writes a real conversion as a cast); or
+    - the function's machine code has no instruction for that direction (`fild`-family or `cvtsi2ss` for int→float; `fist`-family, `cvt(t)ss2si` or `_ftol` for float→int); or
+    - the operand is a field the function never loads with `fild` (`(float)param_2[6]`, with +0x18 never `fild`'ed).
+
+    That rewrites 1,884 conversions. Hex constants stored into floats (`ghidra_set_bits`) and passed to float parameters are spelled as bits too.
+  - **Other decompiler fixes on the way:**
+    - **Wrapped virtual calls:** 332 calls through a code pointer that Ghidra had wrapped onto two lines escaped the virtual-call rewrites and ran without `this`. Lines are now joined first.
+    - **Float returns:** 83 virtual calls returning an x87 float were typed as returning int. The call's `(float10)` cast now gives the return type, which fixed the camera's field of view, so the projection is no longer NaN.
+    - **Float-global rule:** a label is a float only when it's read as `(float10)G` (an x87 load). `(float)G` converts an integer. The screen width had been declared float, which made every viewport 0×0. A label copied into an `int` local is an integer.
+    - **`SetRenderState_Simple` methods:** headers that looked like code addresses (`FUN_0004035c`, `thunk_FUN_0003d050`) are numbers again.
+    - **`SetVertexShaderConstantNotInline`:** takes ECX, EDX and one stack dword, popped with `ret 4` (`ApplyCrtSignatures.java` now accepts `purge=N`).
+    - **Matrix helpers:** the matrix rotates FUN_001ca210/1e0 are thiscall (the matrix in ECX, saved in EDX). The SSE matrix product FUN_00130831 is hand-written in `game_fixes.c`.
+  - **Watching an object from birth:** `DRA2_WATCHALLOC=<size>,<n>,<offset>`. `port_watch_write` now arms the hardware watchpoint on the spot, through an exception whose handler sets DR0/DR7. The sampler used to arm it a period later, after the first writes. That's how the texture matrix's writer was found.
 - **First frame presented (`[d3d] frame 1`).** The first menu screen sets up, updates and draws through the stub Direct3D calls (`SetRenderState_Simple`, `SetTransform`, `SetViewport`, `SetTexture`), and `Swap` presents. Nothing visible is drawn yet: the render states, textures and geometry are stubs. Loading then continues, and the next crash is in `SystemMessage`'s draw path (`FUN_001a8870`, reading −1). Some file names still get a garbage `%s` (`menu_legal_D$ÿ`), so one more call passes its language string wrong.
 - **What fixed the menu:**
   - **The resource-type registry sort.** An introsort over 0x10c-byte records `{name[0x104], create, ...}` overwrote the first menu screen. Its partition (`FUN_0013da90`) and heap adjust (`FUN_0013d210`) take a record by value, which the decompiler didn't declare: one reads it through `&param_1 + 8`, the other as `in_stack_00000114`. The pivot was garbage and the range ran 27 records past the vector. Both now declare the record (67 stack dwords), and `FUN_0013d210` is no longer listed as variadic. Found with `DRA2_WATCHALLOC=28c` (below).

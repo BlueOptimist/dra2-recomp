@@ -239,8 +239,12 @@ static void check_all(void)
 }
 
 /* FUN_0012ae24: RtlAllocateHeap(heap, flags, size), reached through LocalAlloc */
-/* DRA2_WATCHALLOC=<size hex>[,<n>]: the n-th (default first) block of that size is handed to the write watchpoint
- * (port/crash.c, needs DRA2_SAMPLE): "who overwrote this object" when the object is reached only at run time */
+/* DRA2_WATCHALLOC=<size hex>[,<n>[,<offset hex>]]: the n-th (default first) block of that size, at that offset, is
+ * handed to the write watchpoint (port/crash.c, needs DRA2_SAMPLE): "who overwrote this object" when the object is
+ * reached only at run time */
+static DWORD watchalloc_offset;
+static void *alloc40[65536];  /* every 0x40-byte block, in allocation order (port_alloc40_index) */
+static unsigned alloc40_count;
 void port_watch_write(DWORD addr);
 static DWORD watchalloc_size, watchalloc_nth = 1, watchalloc_seen;
 static int watchalloc_read;
@@ -263,10 +267,25 @@ static void watchalloc_check(void *p, DWORD size)
                 for (s++; *s >= '0' && *s <= '9'; s++)
                     watchalloc_nth = watchalloc_nth * 10 + (DWORD)(*s - '0');
             }
+            if (*s == ',')  /* ,<offset hex>: a field inside the block */
+                for (s++; *s; s++)
+                    watchalloc_offset = watchalloc_offset * 16 +
+                                        (*s >= '0' && *s <= '9' ? *s - '0' : (*s | 0x20) - 'a' + 10);
         }
     }
     if (watchalloc_size && size == watchalloc_size && ++watchalloc_seen == watchalloc_nth)
-        port_watch_write((DWORD)p);
+        port_watch_write((DWORD)p + watchalloc_offset);
+    if (size == 0x40 && alloc40_count < sizeof alloc40 / sizeof *alloc40)
+        alloc40[alloc40_count++] = p;
+}
+
+/* which 0x40-byte allocation (1-based, in allocation order) p is, for DRA2_WATCHALLOC=40,<n>; 0 if not one */
+int port_alloc40_index(void *p)
+{
+    for (unsigned i = alloc40_count; i-- > 0;)
+        if (alloc40[i] == p)
+            return (int)i + 1;
+    return 0;
 }
 
 void *__stdcall FUN_0012ae24(void *heap, DWORD flags, DWORD size)

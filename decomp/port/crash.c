@@ -80,12 +80,19 @@ static int watchw_depth = -1, watchw_armed, watchw_hits;
 
 /* the allocator's DRA2_WATCHALLOC hook (port/xapi.c): watch writes to the first word of this block (the sampler
  * arms it within one sample period) */
+WINIMPORT void WINAPI RaiseException(DWORD code, DWORD flags, DWORD argc, const DWORD *argv);
+#define ARM_WATCH_EXCEPTION 0x0DA20001u  /* port_watch_write -> on_exception: arm DR0 on this very thread */
+
 void port_watch_write(DWORD addr)
 {
     watchw_addr = addr;
     watchw_depth = 0;
     watchw_armed = 0;
     printf("[watch] block %08lx will be watched\n", (unsigned long)addr);
+    /* Arm it now, from this thread: a thread can't set its own debug registers with SetThreadContext, but the
+     * context an exception handler returns with can. (The sampler would arm it within one period, after the block's
+     * first writes.) */
+    RaiseException(ARM_WATCH_EXCEPTION, 0, 0, 0);
 }
 #define CTX_DR0 0x04
 #define CTX_DR6 0x14
@@ -95,6 +102,15 @@ void port_watch_write(DWORD addr)
 static long WINAPI on_exception(EXCEPTION_POINTERS_32 *info)
 {
     DWORD code = info->record->ExceptionCode;
+    if (code == ARM_WATCH_EXCEPTION) {
+        void *c = info->context;
+        CTX_U32(c, 0) |= CONTEXT_I386_DEBUG_REGISTERS;  /* ContextFlags */
+        CTX_U32(c, CTX_DR0) = watchw_addr;
+        CTX_U32(c, CTX_DR7) = 1u | (1u << 16) | (3u << 18); /* L0, write, 4 bytes */
+        watchw_armed = 1;
+        printf("[watch] armed at once: writes to %08lx\n", (unsigned long)watchw_addr);
+        return -1; /* EXCEPTION_CONTINUE_EXECUTION */
+    }
     if (code == 0x80000004u && watchw_armed) {  /* EXCEPTION_SINGLE_STEP: the data breakpoint fired */
         void *c = info->context;
         if (watchw_hits++ < 32) {
