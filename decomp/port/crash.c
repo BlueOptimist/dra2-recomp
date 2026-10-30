@@ -90,6 +90,15 @@ static long WINAPI on_exception(EXCEPTION_POINTERS_32 *info)
     printf("\n[crash] eax=%08lx ebx=%08lx ecx=%08lx edx=%08lx esi=%08lx edi=%08lx ebp=%08lx esp=%08lx\n",
            CTX_U32(c, CTX_EAX), CTX_U32(c, CTX_EBX), CTX_U32(c, CTX_ECX), CTX_U32(c, CTX_EDX),
            CTX_U32(c, CTX_ESI), CTX_U32(c, CTX_EDI), CTX_U32(c, CTX_EBP), CTX_U32(c, CTX_ESP));
+    /* ECX is usually "this": its first words and the vtable they point to (a null virtual call shows the slot) */
+    DWORD *obj = (DWORD *)CTX_U32(c, CTX_ECX);
+    if (!IsBadReadPtr(obj, 16)) {
+        printf("[crash] [ecx] %08lx %08lx %08lx %08lx\n", obj[0], obj[1], obj[2], obj[3]);
+        DWORD *vt = (DWORD *)obj[0];
+        if (!IsBadReadPtr(vt, 64))
+            for (int k = 0; k < 16; k += 4)
+                printf("[crash] vtable+%02x %08lx %08lx %08lx %08lx\n", k * 4, vt[k], vt[k + 1], vt[k + 2], vt[k + 3]);
+    }
     /* the top of the stack: after a call through a null pointer, [esp] is the return address into the caller */
     DWORD *esp = (DWORD *)CTX_U32(c, CTX_ESP);
     for (int k = 0; k < 64 && !IsBadReadPtr(esp + k, 4); k++)  /* deep enough to get past C runtime frames */

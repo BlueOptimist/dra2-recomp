@@ -57,3 +57,5 @@
 !/analysis/stack_params.tsv
 !/analysis/narrow_params.tsv
 !/analysis/missing_this.tsv
+!/analysis/code_pops.tsv
+!/analysis/source_patches.tsv

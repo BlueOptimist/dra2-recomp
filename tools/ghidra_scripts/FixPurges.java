@@ -44,7 +44,7 @@ public class FixPurges extends GhidraScript {
 						VariableStorage st = p.getVariableStorage();
 						params.add(new ParameterImpl(p.getName(), p.getDataType(), st, currentProgram));
 						if (st.isStackStorage()) {
-							stackEnd = Math.max(stackEnd, st.getStackOffset() + st.size());
+							stackEnd = Math.max(stackEnd, (st.getStackOffset() + st.size() + 3) & ~3);  // whole slots
 						}
 					}
 					// the code pops arguments the signature doesn't have
@@ -57,8 +57,13 @@ public class FixPurges extends GhidraScript {
 					}
 					ReturnParameterImpl ret = new ReturnParameterImpl(f.getReturn().getDataType(),
 						f.getReturn().getVariableStorage(), currentProgram);
-					f.updateFunction(f.getCallingConventionName(), ret, params, FunctionUpdateType.CUSTOM_STORAGE,
-						true, SourceType.USER_DEFINED);
+					// custom storage under an "unknown" convention: the decompiler ignores the parameters
+					String cc = f.getCallingConventionName();
+					if (cc == null || cc.equals("unknown") || cc.equals("default")) {
+						cc = pop == 0 ? "__cdecl" : "__stdcall";
+					}
+					f.updateFunction(cc, ret, params, FunctionUpdateType.CUSTOM_STORAGE, true,
+						SourceType.USER_DEFINED);
 					f.setStackPurgeSize(pop);
 					fixed++;
 				}

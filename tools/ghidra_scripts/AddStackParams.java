@@ -44,7 +44,7 @@ public class AddStackParams extends GhidraScript {
 						VariableStorage st = p.getVariableStorage();
 						params.add(new ParameterImpl(p.getName(), p.getDataType(), st, currentProgram));
 						if (st.isStackStorage()) {
-							stackEnd = Math.max(stackEnd, st.getStackOffset() + st.size());
+							stackEnd = Math.max(stackEnd, (st.getStackOffset() + st.size() + 3) & ~3);  // whole slots
 						}
 					}
 					int before = params.size(), k = params.size();
@@ -58,8 +58,13 @@ public class AddStackParams extends GhidraScript {
 					}
 					ReturnParameterImpl ret = new ReturnParameterImpl(f.getReturn().getDataType(),
 						f.getReturn().getVariableStorage(), currentProgram);
-					f.updateFunction(f.getCallingConventionName(), ret, params, FunctionUpdateType.CUSTOM_STORAGE,
-						true, SourceType.USER_DEFINED);
+					// custom storage under an "unknown" convention: the decompiler ignores the parameters
+					String cc = f.getCallingConventionName();
+					if (cc == null || cc.equals("unknown") || cc.equals("default")) {
+						cc = purge > 0 ? "__stdcall" : "__cdecl";
+					}
+					f.updateFunction(cc, ret, params, FunctionUpdateType.CUSTOM_STORAGE, true,
+						SourceType.USER_DEFINED);
 					if (purge >= 0) {
 						f.setStackPurgeSize(purge);
 					}

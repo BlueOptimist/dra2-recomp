@@ -1,0 +1,2 @@
+address	old	new	reason
+000a2250	FUN_001a1e70((undefined4 *)&local_48,	FUN_001a1e70((undefined4 *)local_40,	game_main: the display settings struct. FUN_001a4020 initialises it through local_40 (lea ecx,[esp+64h] after push ebx), FUN_001a1e70 copies it from the same address (lea ecx,[esp+78h] with 16 more bytes pushed: __controlfp's 8 are cleaned up later); the decompiler's stack depth is 8 bytes off between them, so it named the second local_48 and the copy started 8 bytes early (first field never set)

@@ -605,7 +605,7 @@ def slot_calls(line, counter=None):
         if close < 0 or line[close + 1:close + 2] != "(":
             continue
         target = line[m.end():close].strip()
-        tm = re.fullmatch(r"(.+)->vftable->(slot\w+)", target)
+        tm = re.fullmatch(r"(.+)->vftable->(\w+)", target)  # slot03_1de00f, or a named one (Setup)
         if not tm:
             continue
         obj = tm.group(1).strip()
@@ -682,6 +682,18 @@ def slot0_calls(line, counter=None):
     return "".join(out) + line[pos:]
 
 
+SOURCE_PATCHES = {}  # address -> [(old, new)], from analysis/source_patches.tsv
+SOURCE_PATCHES_APPLIED = set()
+
+
+def load_source_patches(decomp):
+    path = os.path.join(decomp, "..", "analysis", "source_patches.tsv")
+    if not os.path.exists(path):
+        return
+    for row in csv.DictReader(open(path), delimiter="\t"):
+        SOURCE_PATCHES.setdefault(row["address"], []).append((row["old"], row["new"]))
+
+
 def fix_pseudo_storage(lines, class_methods):
     """Give Ghidra's pseudo-variables real storage, function by function:
     - stack0xNNNNNNNN (a stack slot relative to the stack pointer at entry): positive offsets are the incoming
@@ -711,6 +723,12 @@ def fix_pseudo_storage(lines, class_methods):
             out.extend(lines[i:])
             break
         sig_lines, body = lines[i:j + 1], lines[j + 1:k]
+        # analysis/source_patches.tsv: one-off fixes for decompiler mistakes no general rule covers, on the raw text
+        for old, new in SOURCE_PATCHES.get(m.group(1), []):
+            joined = "".join(body)
+            if old in joined:
+                body = joined.replace(old, new).splitlines(keepends=True)
+                SOURCE_PATCHES_APPLIED.add((m.group(1), old))
         sig = " ".join(l.strip() for l in sig_lines[1:-1] if not l.strip().startswith(("/*", "*", "//")))
         params = split_params(sig)
         names = [n for _, n in params]
@@ -895,7 +913,7 @@ def preprocess(src, dst, class_methods=None):
         line = re.sub(r"\bNAN\b(?!\s*\()", '__builtin_nanf("")', line)
         if VCALL in line:
             line = vcall_this(line)
-        if "->vftable->slot" in line:
+        if "->vftable->" in line:
             line = slot_calls(line)
         if "(*(code *)**(" in line:
             line = slot0_calls(line)
@@ -966,6 +984,7 @@ def main():
     if not os.path.exists(program_h):
         raise SystemExit("build/program.h missing: run ExportHeader.java first")
     program_text = open(program_h, encoding="latin-1").read()
+    load_source_patches(decomp)
 
     # format struct sizes
     check = os.path.join(build, "format_sizes.c")
@@ -1035,6 +1054,8 @@ def main():
     # and no label is wider than the distance to the next one (analysis/data_symbols.tsv). Declared 4 bytes, the
     # flag byte at 0x2f7b14 also read its neighbour 0x2f7b15.
     byte_globals = set()
+    float_globals = set()  # declared float; integer stores and casts of them become bit copies (below)
+    int_globals = set()  # used with an integer-only operator: never a float
     plain_deref = set()  # "*G" with no cast: the code reads what G points at with G's own element type
     pointer_copies = []  # "H = G + ...;": G has H's pointer type
     label_width = {}
@@ -1066,6 +1087,13 @@ def main():
             arrow_globals.add(m.group(1))
         for m in re.finditer(rf"(?<![\w)\]])\*\s*{_G}\b(?!\s*[\[(])", text):
             plain_deref.add(m.group(1))
+        # "(float10)DAT_00311d48": a float label (for an integer one the decompiler shows (float10)(int)G)
+        for m in re.finditer(rf"\((?:float10|float|double)\)\s*{_G}\b(?!\s*[\[(])", text):
+            float_globals.add(m.group(1))
+        # ... unless an integer-only operator uses it too (DAT_002f42fc % 900: a frame counter)
+        for m in re.finditer(rf"(?<![\w.>*&]){_G}\s*(?:%|<<|>>|\+\+|--|[&|^](?![&|=]))|"
+                             rf"(?:%|<<|>>|\+\+|--)\s*{_G}\b", text):
+            int_globals.add(m.group(1) or m.group(2))
         for m in re.finditer(rf"^\s*{_G}\s*=\s*{_G}\s*[+;]", text, re.M):
             pointer_copies.append((m.group(1), m.group(2)))
         for m in re.finditer(rf"(?<![\w.>*&]){_G}\s*(?:[=!]=|=)\s*'", text):
@@ -1139,11 +1167,21 @@ def main():
     # print G[1]), whatever type the label got here. Declared int *, C read G + 0x10.
     cast_offset = re.compile(r"(\*\s*\([^()]*\*\s*\)\s*\(\s*)(" + "|".join(map(re.escape, sorted(scaled))) +
                              r")(\s*[+-]\s*)") if scaled else None
+    # float labels: integer constants stored into them and integer casts of them are bit copies, as for float locals
+    floats = sorted(g for g in float_globals
+                    if g not in pointer_globals and g not in wide_globals and g not in int_globals)
+    if floats:
+        alt = "|".join(map(re.escape, floats))
+        float_store = re.compile(rf"(?<![\w.>*&])({alt})\s*=\s*(-?(?:0x[0-9a-f]+|\d+))\s*;")
+        float_cast = re.compile(rf"\((int|uint|undefined4)\)\s*({alt})\b")
     for p in pp_files:
         text = open(p, encoding="latin-1").read()
         new = arrow_ref.sub(lambda mm: f"(({arrow_types[mm.group(1)]} *){mm.group(1)})->", text) if arrow_ref else text
         if cast_offset:
             new = cast_offset.sub(r"\1(int)\2\3", new)
+        if floats:
+            new = float_store.sub(r"*(uint *)&\1 = \2;", new)
+            new = float_cast.sub(r"(\1)*(uint *)&\2", new)
         parts = re.split(r"(?m)(^// [0-9a-f]{8} .*$)", new)
         for k in range(2, len(parts), 2):
             views = integer_view(parts[k])
@@ -1187,12 +1225,18 @@ def main():
                 f.write(f"extern {t}{g}; /* dereferenced by the code */\n")
             elif g in wide_globals:
                 f.write(f"extern {wide_globals[g]} {g}; /* holds an 8-byte value */\n")
+            elif g in float_globals and g not in int_globals and label_width.get(g, 4) >= 4:
+                f.write(f"extern float {g}; /* read as (float10)G: a float */\n")
             elif g in byte_globals or label_width.get(g, 4) == 1:
                 f.write(f"extern undefined1 {g}; /* a byte */\n")
             elif label_width.get(g, 4) in (2, 3):
                 f.write(f"extern undefined2 {g}; /* the next label is 2 bytes on */\n")
             else:
                 f.write(f"extern undefined4 {g};\n")
+    wanted = {(a, old) for a, ps in SOURCE_PATCHES.items() for old, _ in ps}
+    print(f"source patches applied: {len(SOURCE_PATCHES_APPLIED)} of {len(wanted)}")
+    for a, old in sorted(wanted - SOURCE_PATCHES_APPLIED):
+        print(f"  not found (the export changed?): {a}: {old}")
     print(f"{len(pp_files)} files, {len(globals_used - defined)} global labels declared "
           f"({len(pointer_globals)} as pointers)")
 

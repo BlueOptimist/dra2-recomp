@@ -18,11 +18,57 @@ static volatile int any_calls;
 static void *recent_fn[RECENT], *recent_site[RECENT];
 static unsigned recent_next;
 
+/* DRA2_HEAPVALIDATE=<n>: every n function entries, Windows checks the whole process heap (the game's blocks and the
+ * C runtime's alike). The first failure reports the window of call numbers it happened in and the last function
+ * entries, then stops. DRA2_HEAPVALIDATE_FROM=<call number> checks on every entry from there on, which names the
+ * call during which the heap was damaged. */
+typedef void *HANDLE_;
+__declspec(dllimport) HANDLE_ __stdcall GetProcessHeap(void);
+__declspec(dllimport) int __stdcall HeapValidate(HANDLE_ heap, unsigned long flags, const void *mem);
+__declspec(dllimport) unsigned long __stdcall GetEnvironmentVariableA(const char *name, char *value, unsigned long n);
+__declspec(dllimport) __declspec(noreturn) void __stdcall ExitProcess(unsigned code);
+void port_calls_recent(void);
+
+static int validate_every = -1;
+static unsigned validate_from, last_valid;
+
+__attribute__((no_instrument_function)) static unsigned env_number(const char *name)
+{
+    char v[16];
+    unsigned long n = GetEnvironmentVariableA(name, v, sizeof v);
+    unsigned x = 0;
+    for (unsigned long i = 0; i < n && v[i] >= '0' && v[i] <= '9'; i++)
+        x = x * 10 + (unsigned)(v[i] - '0');
+    return x;
+}
+
+__attribute__((no_instrument_function)) static void validate_heap(unsigned call)
+{
+    if (validate_every < 0) {
+        validate_every = (int)env_number("DRA2_HEAPVALIDATE");
+        validate_from = env_number("DRA2_HEAPVALIDATE_FROM");
+    }
+    if (validate_every <= 0 && !validate_from)
+        return;
+    int now = (validate_from && call >= validate_from) || (validate_every > 0 && call % validate_every == 0);
+    if (!now)
+        return;
+    if (HeapValidate(GetProcessHeap(), 0, 0)) {
+        last_valid = call;
+        return;
+    }
+    printf("[heap] process heap damaged between function entry %u (last valid check) and %u\n", last_valid, call);
+    port_calls_recent();
+    ExitProcess(3);
+}
+
 __attribute__((no_instrument_function)) void __cyg_profile_func_enter(void *fn, void *site)
 {
+    unsigned call = recent_next;
     unsigned r = recent_next++ % RECENT;
     recent_fn[r] = fn;
     recent_site[r] = site;
+    validate_heap(call);
     unsigned h = ((unsigned)fn >> 4) * 2654435761u >> 16;
     for (unsigned k = 0; k < CALL_SLOTS; k++) {
         CallSlot *s = &slots[(h + k) & (CALL_SLOTS - 1)];

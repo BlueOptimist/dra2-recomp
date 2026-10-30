@@ -135,7 +135,17 @@ DWORD __stdcall XAPILIB__SignalObjectAndWait(void *signal, void *wait, DWORD ms,
     return SignalObjectAndWait(signal, wait, ms, alertable);
 }
 
-void __stdcall XAPILIB__Sleep(DWORD ms) { Sleep(ms); }
+void __stdcall XAPILIB__Sleep(DWORD ms)
+{
+    /* The frame limiter sleeps for the rest of the frame: more than a second means its time math went wrong */
+    if (ms > 1000) {
+        static int reported;
+        if (reported++ < 4)
+            printf("[xapi] Sleep(%lu ms) requested from %p: shortened to 16 ms\n", ms, __builtin_return_address(0));
+        ms = 16;
+    }
+    Sleep(ms);
+}
 DWORD __stdcall XAPILIB__GetLastError(void) { return GetLastError(); }
 int __stdcall XAPILIB__QueryPerformanceCounter(LONGLONG *count) { return QueryPerformanceCounter(count); }
 int __stdcall XAPILIB__QueryPerformanceFrequency(LONGLONG *freq) { return QueryPerformanceFrequency(freq); }

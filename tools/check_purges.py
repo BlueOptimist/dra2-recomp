@@ -49,6 +49,7 @@ def main():
     rets.sort()
     addrs = [a for a, _ in rets]
     rows, checked = [], 0
+    code_pops = []  # every function with one consistent ret N: for ApplyCodePops.java, which compares the database
     for path in sorted(glob.glob(os.path.join(decomp, "src", "**", "*.c"), recursive=True)):
         parts = HEADER.split(open(path, encoding="latin-1").read())
         for i in range(1, len(parts), 4):
@@ -79,6 +80,7 @@ def main():
                 continue  # no return found, or several (tail jumps, data in code): not conclusive
             checked += 1
             actual = pops.pop()
+            code_pops.append((parts[i], name, actual))
             if actual != expected:
                 rows.append((parts[i], name, conv, expected, actual, sig))
     with open(out, "w") as f:
@@ -86,6 +88,12 @@ def main():
         for r in rows:
             f.write("\t".join(map(str, r)) + "\n")
     print(f"functions checked: {checked}, pop mismatches: {len(rows)} -> {out}")
+    pops_out = os.path.join(os.path.dirname(out), "code_pops.tsv")
+    with open(pops_out, "w") as f:
+        f.write("address\tname\tcode_pop\n")
+        for a, n, p in code_pops:
+            f.write(f"{a}\t{n}\t{p}\n")
+    print(f"code pops of {len(code_pops)} functions -> {pops_out} (ApplyCodePops.java checks the database)")
 
 
 if __name__ == "__main__":

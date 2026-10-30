@@ -361,7 +361,17 @@ Drawing (push buffers, shaders, textures) is the next part. With the device in p
 
 **Where it stands now.**
 - **What runs:** the boot loads `levels/menu_black.res` and `lua.res` completely through the game's own streaming reader (open, header, data and relocation reads, completion callbacks). It initialises DirectSound (still stubs), then builds the menu and runs its screens' update loop.
-- **Where it stops:** a heap-corruption bug that depends on memory layout.
+- **This round:**
+  - `CreateDevice` now gets the right present parameters (640×480, pitch 2560). That came out of the stack-purge work: `ApplyCodePops.java` sets every function's purge in the database from its code (`analysis/code_pops.tsv`, written by `check_purges.py`, which can't see the database's own value).
+  - Stack parameters are added on 4-byte slot boundaries, and an "unknown" convention gets a real one, since with custom storage the decompiler otherwise ignores the parameters.
+  - Float labels read as `(float10)G` are declared `float` unless an integer operator uses them. Read as integers, the frame limiter computed a sleep of 23 days.
+  - Named vtable slots (`->vftable->Setup`) are called as `__thiscall` like the numbered ones (334 sites).
+  - `analysis/source_patches.tsv` holds one-off fixes. The first is `game_main`'s display-settings struct, which the decompiler named twice 8 bytes apart.
+  - `Sleep` over a second is shortened and reported.
+  - The crash report shows the words at ECX and its vtable.
+  - `DRA2_HEAPVALIDATE=<n>` (`port/calls.c`, `-Instrument`) has Windows check the whole process heap every n function entries. It reports the window of entries the damage happened in, and `DRA2_HEAPVALIDATE_FROM=<entry>` checks every entry from there.
+- **Where it stops:** the first menu screen's setup. Its crashes move with the stack contents (heap corruption at an allocation in `FUN_00148e80` in a plain run; a null vtable read in `MenuScreen::vf13` with heap validation on), so some code there reads uninitialised memory. That is the next thing to find. The notes below are from the previous round.
+- **Previous round:** a heap-corruption bug that depends on memory layout.
   - **With `DRA2_HEAPCHECK=1`** (guards and quarantine): the first menu screen sets up, updates and is torn down, and the game builds the legal screen (`MenuLegal`). Its resource load then fails ("couldn't allocate data area").
   - **Without it**: the process heap is reported corrupted ("heap corruption", `0xC0000374`), at a different point depending on the build. In one build, before 16-byte slack was added to every block, the game had reached its first draw call (`FUN_00115ff0` → `MenuScreen::vf10` → `D3DDevice_SetRenderState_Simple`).
   - **What's ruled out:** the guard and quarantine checks report no write past the end of a game heap block and no write into a freed one.
