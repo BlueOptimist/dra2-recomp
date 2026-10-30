@@ -113,7 +113,18 @@ static long WINAPI on_exception(EXCEPTION_POINTERS_32 *info)
     }
     if (code == 0x80000004u && watchw_armed) {  /* EXCEPTION_SINGLE_STEP: the data breakpoint fired */
         void *c = info->context;
-        if (watchw_hits++ < 32) {
+        /* DRA2_WATCHVALUE=<hex>: report only the writes that leave this value (and then without a limit) */
+        static int value_read;
+        static DWORD value, value_set;
+        if (!value_read) {
+            char v[16];
+            DWORD n = GetEnvironmentVariableA("DRA2_WATCHVALUE", v, sizeof v);
+            value_read = 1;
+            for (DWORD i = 0; i < n; i++)
+                value = value * 16 + (DWORD)(v[i] <= '9' ? v[i] - '0' : (v[i] | 0x20) - 'a' + 10), value_set = 1;
+        }
+        DWORD now = IsBadReadPtr((void *)CTX_U32(c, CTX_DR0), 4) ? 0 : *(DWORD *)CTX_U32(c, CTX_DR0);
+        if (value_set ? now == value && watchw_hits++ < 16 : watchw_hits++ < 32) {
             DWORD addr = CTX_U32(c, CTX_DR0);
             printf("[watch] write to %08lx, now %08lx\n", (unsigned long)addr,
                    IsBadReadPtr((void *)addr, 4) ? 0ul : (unsigned long)*(DWORD *)addr);

@@ -10,6 +10,8 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <d3d9.h>
+#include <d3dcommon.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -292,10 +294,260 @@ void gpu_render_state(unsigned method, unsigned value)
 
 static GpuVertex scratch[0x20000];
 
-/* the register combiners, approximated for now: texture 0 times the diffuse colour */
+/* -------------------------------------------------------------------------------- register combiners -- */
+/* The Xbox's pixel stage is the NV2A's register combiners, set as a D3DPIXELSHADERDEF (SetPixelShaderProgram). Each
+ * program is translated once into Direct3D 9 ps_2_0 bytecode, emitted directly (no shader compiler is available):
+ *  - NV registers live in temporaries: R0 r0, R1 r1, T0-T3 r2-r5 (loaded with texld), V0/V1 r6/r7 (the diffuse and
+ *    specular colours); r8-r11 are scratch. c0-c15 hold each stage's C0/C1, c16/c17 the final combiner's, c18 the fog
+ *    colour, c20 = (0, 1, 0.5, 2).
+ *  - A stage computes, for its RGB and alpha portions separately, A*B (or dot3), C*D (or dot3) and their sum (or a mux
+ *    on r0.a), each after the inputs' mappings (invert, expand, half bias, negate) and before the output's scale/bias;
+ *    all reads happen before the stage's writes, as on the hardware.
+ *  - The final combiner: rgb = A*B + (1-A)*C + D, alpha = G, with E*F and V1+R0 as extra inputs. */
+typedef struct {
+    DWORD alpha_inputs[8], final_abcd, final_efg, constant0[8], constant1[8], alpha_outputs[8], rgb_inputs[8];
+    DWORD compare_mode, final_constant0, final_constant1, rgb_outputs[8], combiner_count, texture_modes, dot_mapping;
+    DWORD input_texture, c0_mapping, c1_mapping, final_constants;
+} PixelShaderDef;
+
+extern void *nv_pixel_shader;  /* port/d3d8.c */
+
+/* HLSL for one combiner program, compiled with D3DCompile (d3dcompiler_47.dll, part of Windows 10 and later) */
+static char hlsl[16384];
+static int hlsl_len;
+
+static void put(const char *format, ...)
+{
+    va_list ap;
+    va_start(ap, format);
+    hlsl_len += vsnprintf(hlsl + hlsl_len, sizeof hlsl - (size_t)hlsl_len, format, ap);
+    va_end(ap);
+}
+
+/* an NV combiner register as an HLSL float4 expression (final: the final combiner's constants) */
+static const char *reg_name(unsigned r, int stage, int final)
+{
+    static char buf[4][24];
+    static int k;
+    char *s = buf[k++ & 3];
+    switch (r) {
+    case 1: snprintf(s, 24, "c[%d]", final ? 16 : 2 * stage); return s;
+    case 2: snprintf(s, 24, "c[%d]", final ? 17 : 2 * stage + 1); return s;
+    case 3: return "c[18]";
+    case 4: return "V0";
+    case 5: return "V1";
+    case 8: return "T0";
+    case 9: return "T1";
+    case 10: return "T2";
+    case 11: return "T3";
+    case 12: return "R0";
+    case 13: return "R1";
+    case 14: return "V1R0";
+    case 15: return "EF";
+    }
+    return "float4(0,0,0,0)";
+}
+
+/* one input: its register's rgb (or alpha replicated) for an RGB portion, alpha (or blue) for an alpha portion,
+ * through its mapping */
+static void put_input(unsigned input, int stage, int alpha_portion, int final)
+{
+    static const char *maps[8] = { "saturate(%s)", "(1 - saturate(%s))", "(2 * saturate(%s) - 1)",
+                                   "(1 - 2 * saturate(%s))", "(saturate(%s) - 0.5)", "(0.5 - saturate(%s))",
+                                   "(%s)", "(-%s)" };
+    char x[64];
+    const char *r = reg_name(input & 0xf, stage, final);
+    if (alpha_portion)
+        snprintf(x, sizeof x, "%s.%s", r, input & 0x10 ? "a" : "b");
+    else
+        snprintf(x, sizeof x, "%s.%s", r, input & 0x10 ? "aaa" : "rgb");
+    put(maps[(input >> 5) & 7], x);
+}
+
+static const char *dest_name(unsigned r)
+{
+    switch (r) {
+    case 4: return "V0";
+    case 5: return "V1";
+    case 8: return "T0";
+    case 9: return "T1";
+    case 10: return "T2";
+    case 11: return "T3";
+    case 12: return "R0";
+    case 13: return "R1";
+    }
+    return 0;
+}
+
+static void put_portion(DWORD inputs, DWORD outputs, int stage, int alpha_portion)
+{
+    const char *t = alpha_portion ? "float" : "float3", *p = alpha_portion ? "a" : "c";
+    static const char *mapping[8] = { "%s", "(%s - 0.5)", "(2 * %s)", "(2 * (%s - 0.5))", "(4 * %s)", "%s",
+                                      "(%s / 2)", "%s" };
+    put("  %s %sA = ", t, p); put_input(inputs >> 24, stage, alpha_portion, 0); put(";\n");
+    put("  %s %sB = ", t, p); put_input((inputs >> 16) & 0xff, stage, alpha_portion, 0); put(";\n");
+    put("  %s %sC = ", t, p); put_input((inputs >> 8) & 0xff, stage, alpha_portion, 0); put(";\n");
+    put("  %s %sD = ", t, p); put_input(inputs & 0xff, stage, alpha_portion, 0); put(";\n");
+    if (!alpha_portion && (outputs & 0x2000))
+        put("  %s %sAB = dot(%sA, %sB);\n", t, p, p, p);
+    else
+        put("  %s %sAB = %sA * %sB;\n", t, p, p, p);
+    if (!alpha_portion && (outputs & 0x1000))
+        put("  %s %sCD = dot(%sC, %sD);\n", t, p, p, p);
+    else
+        put("  %s %sCD = %sC * %sD;\n", t, p, p, p);
+    if (outputs & 0x4000)
+        put("  %s %sSUM = R0.a >= 0.5 ? %sCD : %sAB;\n", t, p, p, p);
+    else
+        put("  %s %sSUM = %sAB + %sCD;\n", t, p, p, p);
+    const char *m = mapping[(outputs >> 15) & 7];
+    static const char *parts[3] = { "AB", "CD", "SUM" };
+    for (int k = 0; k < 3; k++) {
+        char v[16];
+        snprintf(v, sizeof v, "%s%s", p, parts[k]);
+        put("  %s = clamp(", v);
+        put(m, v);
+        put(", -1, 1);\n");
+    }
+}
+
+static void put_writes(DWORD outputs, int alpha_portion)
+{
+    const char *p = alpha_portion ? "a" : "c", *mask = alpha_portion ? "a" : "rgb";
+    unsigned dests[3] = { (outputs >> 4) & 0xf, outputs & 0xf, (outputs >> 8) & 0xf };
+    static const char *parts[3] = { "AB", "CD", "SUM" };
+    for (int k = 0; k < 3; k++) {
+        const char *d = dest_name(dests[k]);
+        if (d)
+            put("  %s.%s = %s%s;\n", d, mask, p, parts[k]);
+    }
+}
+
+/* final-combiner input: rgb (or alpha replicated), unsigned, maybe inverted */
+static void put_final_input(unsigned input)
+{
+    put("%s(saturate(%s.%s))", input & 0x20 ? "1 - " : "", reg_name(input & 0xf, 0, 1), input & 0x10 ? "aaa" : "rgb");
+}
+
+typedef HRESULT(WINAPI *D3DCompileFn)(const void *, SIZE_T, const char *, const void *, void *, const char *,
+                                       const char *, UINT, UINT, ID3DBlob **, ID3DBlob **);
+
+static IDirect3DPixelShader9 *translate(const PixelShaderDef *ps)
+{
+    static D3DCompileFn compile;
+    if (!compile) {
+        HMODULE m = LoadLibraryA("d3dcompiler_47.dll");
+        compile = m ? (D3DCompileFn)(void *)GetProcAddress(m, "D3DCompile") : 0;
+        if (!compile) {
+            printf("[gpu] d3dcompiler_47.dll not found: no register combiners\n");
+            return 0;
+        }
+    }
+    hlsl_len = 0;
+    put("float4 c[19] : register(c0);\n");
+    for (int t = 0; t < 4; t++)
+        put("sampler2D s%d : register(s%d);\n", t, t);
+    put("float4 main(float4 v0 : COLOR0, float4 v1 : COLOR1, float4 t0 : TEXCOORD0, float4 t1 : TEXCOORD1,\n"
+        "            float4 t2 : TEXCOORD2, float4 t3 : TEXCOORD3) : COLOR\n{\n");
+    put("  float4 V0 = v0, V1 = v1, R1 = 0;\n");
+    for (int t = 0; t < 4; t++) {
+        unsigned mode = (ps->texture_modes >> (5 * t)) & 0x1f;
+        if (mode)
+            put("  float4 T%d = tex2D(s%d, t%d.xy);\n", t, t, t);
+        else
+            put("  float4 T%d = 0;\n", t);
+    }
+    put("  float4 R0 = float4(0, 0, 0, T0.a);\n");
+    unsigned stages = ps->combiner_count & 0xff;
+    for (unsigned s = 0; s < stages && s < 8; s++) {
+        put("  {\n");
+        put_portion(ps->rgb_inputs[s], ps->rgb_outputs[s], (int)s, 0);
+        put_portion(ps->alpha_inputs[s], ps->alpha_outputs[s], (int)s, 1);
+        put_writes(ps->rgb_outputs[s], 0);
+        put_writes(ps->alpha_outputs[s], 1);
+        put("  }\n");
+    }
+    DWORD abcd = ps->final_abcd, efg = ps->final_efg;
+    unsigned g = (efg >> 8) & 0xff;
+    put("  float4 V1R0 = float4(saturate(V1.rgb + R0.rgb), 0);\n");
+    put("  float4 EF = float4("); put_final_input(efg >> 24); put(" * "); put_final_input((efg >> 16) & 0xff); put(", 0);\n");
+    put("  float3 fA = "); put_final_input(abcd >> 24); put(";\n");
+    put("  float3 fB = "); put_final_input((abcd >> 16) & 0xff); put(";\n");
+    put("  float3 fC = "); put_final_input((abcd >> 8) & 0xff); put(";\n");
+    put("  float3 fD = "); put_final_input(abcd & 0xff); put(";\n");
+    put("  float alpha = %s(saturate(%s.%s));\n", g & 0x20 ? "1 - " : "", reg_name(g & 0xf, 0, 1), g & 0x10 ? "a" : "b");
+    put("  return float4(saturate(fA * fB + (1 - fA) * fC + fD), alpha);\n}\n");
+
+    ID3DBlob *blob = 0, *errors = 0;
+    HRESULT hr = compile(hlsl, (SIZE_T)hlsl_len, "combiners", 0, 0, "main", "ps_2_b", 0, 0, &blob, &errors);
+    if (FAILED(hr)) {
+        printf("[gpu] combiner program didn't compile: %s\n%s",
+               errors ? (const char *)ID3D10Blob_GetBufferPointer(errors) : "?", hlsl);
+        if (errors)
+            ID3D10Blob_Release(errors);
+        return 0;
+    }
+    IDirect3DPixelShader9 *shader = 0;
+    hr = IDirect3DDevice9_CreatePixelShader(device, (const DWORD *)ID3D10Blob_GetBufferPointer(blob), &shader);
+    ID3D10Blob_Release(blob);
+    if (errors)
+        ID3D10Blob_Release(errors);
+    static int logged;
+    if (FAILED(hr) || logged++ < 4)
+        printf("[gpu] combiner program, %u stages -> ps_2_b: %08lx\n", stages, (unsigned long)hr);
+    return shader;
+}
+/* translated programs, by the definition's contents */
+static struct { PixelShaderDef def; IDirect3DPixelShader9 *shader; } shaders[256];
+static int shader_count;
+
+static void set_constant_color(int reg, DWORD argb)
+{
+    float c[4] = { ((argb >> 16) & 0xff) / 255.0f, ((argb >> 8) & 0xff) / 255.0f, (argb & 0xff) / 255.0f,
+                   (argb >> 24) / 255.0f };
+    IDirect3DDevice9_SetPixelShaderConstantF(device, (UINT)reg, c, 1);
+}
+
+static int pixel_shader(void)
+{
+    const PixelShaderDef *ps = (const PixelShaderDef *)nv_pixel_shader;
+    if (!ps)
+        return 0;
+    IDirect3DPixelShader9 *shader = 0;
+    for (int i = 0; i < shader_count; i++)
+        if (!memcmp(&shaders[i].def, ps, sizeof *ps)) {
+            shader = shaders[i].shader;
+            break;
+        }
+    if (!shader) {
+        shader = translate(ps);
+        if (shader_count < (int)(sizeof shaders / sizeof *shaders)) {
+            shaders[shader_count].def = *ps;
+            shaders[shader_count++].shader = shader;
+        }
+    }
+    if (!shader)
+        return 0;
+    /* constants: each stage's own C0/C1 when the program says so (PS_COMBINERCOUNT_UNIQUE_C0/C1), else stage 0's */
+    int unique_c0 = (ps->combiner_count >> 8) & 0x10, unique_c1 = (ps->combiner_count >> 8) & 0x100 ? 1 : 0;
+    for (int s = 0; s < 8; s++) {
+        set_constant_color(2 * s, ps->constant0[unique_c0 ? s : 0]);
+        set_constant_color(2 * s + 1, ps->constant1[unique_c1 ? s : 0]);
+    }
+    set_constant_color(16, ps->final_constant0);
+    set_constant_color(17, ps->final_constant1);
+    set_constant_color(18, 0xff000000);  /* fog: colour black, factor 1 (no fog yet) */
+    IDirect3DDevice9_SetPixelShader(device, shader);
+    return 1;
+}
+
+/* with no combiner program: texture 0 times the diffuse colour */
 static void combiners(void)
 {
     IDirect3DDevice9 *d = device;
+    if (pixel_shader())
+        return;
+    IDirect3DDevice9_SetPixelShader(d, 0);
     DWORD arg = bound[0].texture ? D3DTOP_MODULATE : D3DTOP_SELECTARG2;
     IDirect3DDevice9_SetTextureStageState(d, 0, D3DTSS_COLOROP, arg);
     IDirect3DDevice9_SetTextureStageState(d, 0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
@@ -364,7 +616,7 @@ void gpu_draw(int primitive, const GpuVertex *v, unsigned count)
     IDirect3DDevice9_SetFVF(device, VERTEX_FVF);
     HRESULT hr = IDirect3DDevice9_DrawPrimitiveUP(device, type, prims, scratch, sizeof(GpuVertex));
     static int logged;
-    if (logged % 100 == 99)
+    if (logged % 10000 == 9999)
         printf("[gpu] draw %d: first vertex %.1f %.1f %.3f rhw %.3f\n", logged + 1, scratch[0].x, scratch[0].y,
                scratch[0].z, scratch[0].rhw);
     if (logged++ < 3 || FAILED(hr)) {

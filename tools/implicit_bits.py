@@ -47,7 +47,7 @@ def load_fp_table(path):
     return table
 
 
-FIELD = (re.compile(r"^\s*[A-Za-z_]\w*\s*\[\s*(0x[0-9a-f]+|\d+)\s*\]\s*$"),                      # p[6]: 4 * 6
+FIELD = (re.compile(r"^\s*(?:[A-Za-z_]\w*|\(.*\))\s*\[\s*(0x[0-9a-f]+|\d+)\s*\]\s*$"),           # p[6], (*(int **)(q + 0xa0))[6]: 4 * 6
          re.compile(r"^\s*\*\s*\(\s*\w+\s*\*\s*\)\s*\(\s*(?:\(int\)\s*)?[A-Za-z_]\w*\s*\+\s*(0x[0-9a-f]+|\d+)\s*\)\s*$"),
          re.compile(r"^\s*\*\s*[A-Za-z_]\w*\s*$"))                                                 # *p: 0
 
@@ -96,14 +96,16 @@ def casts(dump_lines, main_file):
                 c["operand_type"] = (t.group(2) or t.group(1)) if t else "?"
                 c["operand_alias"] = t.group(1) if t else "?"
                 c["operand_start"] = (positions[0][1], positions[0][2]) if positions else None
-                if "<LValueToRValue>" not in raw:
-                    c["through_pointer"] = bool(THROUGH_POINTER.search(raw))
-                    found.append(c)
-                    open_ = None
-                continue
-            c["through_pointer"] = bool(THROUGH_POINTER.search(raw))
-            found.append(c)
-            open_ = None
+                if "<LValueToRValue>" in raw:
+                    continue
+                c["through_pointer"] = bool(THROUGH_POINTER.search(raw))
+                found.append(c)
+                open_ = None
+                # (the operand may itself be a cast: "(float)(int)x", checked below)
+            else:
+                c["through_pointer"] = bool(THROUGH_POINTER.search(raw))
+                found.append(c)
+                open_ = None
         m = CAST.search(raw)
         if m and positions:
             ends = positions[:2] if ", " in m.group(2) else positions[:1] * 2

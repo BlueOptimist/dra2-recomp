@@ -59,6 +59,7 @@
 !/analysis/purge_mismatches.tsv
 !/analysis/indirect_pops.tsv
 !/analysis/fp_conversions.tsv
+!/analysis/format_calls.tsv
 !/analysis/stack_params.tsv
 !/analysis/narrow_params.tsv
 !/analysis/missing_this.tsv

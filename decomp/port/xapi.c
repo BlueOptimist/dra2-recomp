@@ -11,6 +11,7 @@
  */
 #include "win32_min.h"
 
+int snprintf(char *buffer, unsigned size, const char *format, ...);
 int printf(const char *format, ...);
 
 void port_todo(const char *name);
@@ -378,6 +379,17 @@ void *__stdcall FUN_0012d671(const char *name, DWORD access, DWORD share, void *
     char path[MAX_PATH];
     HANDLE h = CreateFileA(map_path(name, path, sizeof path), access, share, security, disposition,
                            flags & ~FILE_FLAG_NO_BUFFERING, templ);
+    /* z:\ is the Xbox's cache partition, where the game keeps copies of disc files (loc\eng\menus\level.res): a
+     * file that isn't cached yet is read from the disc */
+    if (h == INVALID_HANDLE_VALUE && disposition == 3 /* OPEN_EXISTING */ && (name[0] | 0x20) == 'z' &&
+        name[1] == ':') {
+        char disc[MAX_PATH], other[MAX_PATH];
+        snprintf(disc, sizeof disc, "d:%s", name + 2);
+        HANDLE d = CreateFileA(map_path(disc, other, sizeof other), access, share, security, disposition,
+                               flags & ~FILE_FLAG_NO_BUFFERING, templ);
+        if (d != INVALID_HANDLE_VALUE)
+            return d;
+    }
     if (h == INVALID_HANDLE_VALUE && disposition == 3 /* OPEN_EXISTING */) {
         DWORD error = GetLastError();
         printf("[xapi] can't open %s (%s): error %lu\n", name, path, error);
@@ -389,6 +401,19 @@ void *__stdcall FUN_0012d671(const char *name, DWORD access, DWORD share, void *
 int __stdcall XAPILIB__ReadFile(void *h, void *buffer, DWORD size, DWORD *read, void *overlapped)
 {
     int ok = ReadFile(h, buffer, size, read, overlapped);
+    static int logged;
+    if (overlapped && ((DWORD *)overlapped)[2] >= 0x10000000u && logged++ < 2) {
+        void port_print_chain(const char *tag);
+        DWORD error = ok ? 0 : GetLastError();
+        printf("[xapi] ReadFile(%p, %lu bytes) at offset %08lx: past any file (from %p)\n", h, (unsigned long)size,
+               (unsigned long)((DWORD *)overlapped)[2], __builtin_return_address(0));
+        extern DWORD *PTR_DAT_002edcfc;  /* the resource header being read */
+        DWORD *hd = PTR_DAT_002edcfc;
+        printf("[xapi]   resource header %p: %08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx\n", (void *)hd,
+               hd[0], hd[1], hd[2], hd[3], hd[4], hd[5], hd[6], hd[7], hd[8], hd[9]);
+        port_print_chain("fatal");
+        SetLastError(error);
+    }
     if (!ok) {
         DWORD error = GetLastError();
         static int reported;
@@ -408,7 +433,25 @@ DWORD __stdcall XAPILIB__GetFileSize(void *h, DWORD *high) { return GetFileSize(
 
 int __stdcall XAPILIB__GetOverlappedResult(void *h, void *overlapped, DWORD *transferred, int wait)
 {
-    return GetOverlappedResult(h, overlapped, transferred, wait);
+    static void *last;
+    static int polls;
+    int r = GetOverlappedResult(h, overlapped, transferred, wait);
+    DWORD error = r ? 0 : GetLastError();
+    polls = overlapped == last && !r ? polls + 1 : 0;
+    last = overlapped;
+    if (polls == 2000) {
+        DWORD *o = (DWORD *)overlapped;  /* Internal (status), InternalHigh, Offset, OffsetHigh, hEvent */
+        printf("[xapi] GetOverlappedResult(%p) polled 2000 times: error %lu, status %08lx, %lu bytes, offset %08lx, "
+               "event %p (from %p)\n", h, (unsigned long)error, (unsigned long)o[0], (unsigned long)o[1],
+               (unsigned long)o[2], (void *)o[4], __builtin_return_address(0));
+    }
+    static int failures;
+    if (!r && error != 996 && failures++ < 4)  /* other than ERROR_IO_INCOMPLETE */
+        printf("[xapi] GetOverlappedResult(%p): error %lu, offset %08lx, %lu bytes (from %p)\n", h, (unsigned long)error,
+               (unsigned long)((DWORD *)overlapped)[2], (unsigned long)((DWORD *)overlapped)[1], __builtin_return_address(0));
+    if (!r)
+        SetLastError(error);
+    return r;
 }
 
 /* FUN_0012dade: CopyFileA */

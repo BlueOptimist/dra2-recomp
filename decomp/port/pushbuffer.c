@@ -115,6 +115,22 @@ static int draws_logged;
 static void log_draw(const char *kind, unsigned prim, unsigned count)
 {
     nv_draws++;
+    static int nan_logged;
+    if (count && vertices[0].x != vertices[0].x && nan_logged++ < 3) {
+        printf("[nv2a] NaN draw: %s primitive %u, %u vertices, program start %d\n", kind, prim, count, nv_program_start);
+        for (int a = 0; a < 16; a++)
+            if (nv_attributes[a].data && nv_attributes[a].count) {
+                const float *f = (const float *)nv_attributes[a].data;
+                printf("[nv2a]   v%d: stride %u type %u x%u: %g %g %g %g (%08x at %p)\n", a, nv_attributes[a].stride,
+                       nv_attributes[a].type, nv_attributes[a].count, f[0], f[1], f[2], f[3], *(const unsigned *)f,
+                       (const void *)f);
+            }
+        for (int r = -38; r <= 3; r += (r == -37 ? 37 : 1)) {
+            const float *c = nv_constants[r + 96];
+            printf("[nv2a]   c%d: %g %g %g %g\n", r, c[0], c[1], c[2], c[3]);
+        }
+        nv_vsh_dump(nv_program_start, 20);
+    }
     if (draws_logged >= 3)
         return;
     draws_logged++;

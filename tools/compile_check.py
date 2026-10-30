@@ -1076,8 +1076,9 @@ def preprocess(src, dst, class_methods=None):
         # read with the global's type; declared as a pointer to a class struct, "*G + 0x14" would add to a struct
         line = re.sub(r"\(\*\*\(code \*\*\)\(\*(_?(?:DAT|PTR)_[0-9a-f]{8}) \+", r"(**(code **)(*(int *)\1 +", line)
         # "*(int *)(&DAT_0031fa00 + iVar7)": the decompiler adds a byte offset to an untyped label (for a typed one
-        # it would index, (&G)[i]); declared with a wider type, C scaled the offset
-        line = re.sub(r"(\*\s*\([^()]*\*\s*\)\s*\(\s*)&(_?(?:DAT|PTR)_[0-9a-f]{8})(\s*[+-])",
+        # it would index, (&G)[i]); declared with a wider type, C scaled the offset. Also without the dereference:
+        # "(undefined4 *)(&DAT_0031f9ec + iVar7)" was the second stream slot's OVERLAPPED, 3 * 0x93c bytes off.
+        line = re.sub(r"((?:\*\s*)?\([^()]*\*\s*\)\s*\(\s*)&(_?(?:DAT|PTR)_[0-9a-f]{8})(\s*[+-])",
                       r"\1(undefined1 *)&\2\3", line)
         # MSVC C++ exception frames built by hand on the Xbox (fs:[0] chain + a pointer to the function's unwind
         # record in 0x1ee000-0x1fa000). A port doesn't use them: the frame links go, fs:[0] reads as 0, and the

@@ -254,6 +254,13 @@ void __stdcall D3D8__D3DDevice_LoadVertexShaderProgram(DWORD *program, int addre
 {
     load_program(program + 1, ((unsigned short *)program)[1], (unsigned)address);
     static int programs_logged;
+    if (programs_logged < 3) {
+        extern int DAT_003166c8[], DAT_00316748;  /* the material's (feature, stage) list */
+        printf("[d3d] vertex program features:");
+        for (int i = 0; i < DAT_00316748 && i < 24; i++)
+            printf(" %x/%d", DAT_003166c8[2 * i], DAT_003166c8[2 * i + 1]);
+        printf("\n");
+    }
     if (programs_logged++ < 3) {
         printf("[d3d] LoadVertexShaderProgram %u instructions at %d\n", ((unsigned short *)program)[1], address);
         nv_vsh_dump(address, 40);
@@ -440,6 +447,15 @@ static void draw_up(int primitive, unsigned count, const unsigned short *indices
             count = sizeof up_vertices / sizeof *up_vertices;
         for (unsigned i = 0; i < count; i++)
             fvf_vertex(data + (indices ? indices[i] : i) * stride, &up_vertices[i]);
+        static int logged;
+        if (logged++ < 4) {
+            const unsigned *w = (const unsigned *)data;
+            printf("[d3d] FVF %#lx draw: primitive %d, %u vertices, stride %u, data %p:", (unsigned long)current_fvf,
+                   primitive, count, stride, (const void *)data);
+            for (unsigned i = 0; i < stride / 4 && i < 10; i++)
+                printf(" %08x", w[i]);
+            printf("\n");
+        }
         gpu_draw(primitive, up_vertices, count);
         return;
     }
@@ -528,7 +544,34 @@ void __stdcall XGRAPHC__XGSetTextureHeader(unsigned width, unsigned height, unsi
 
 /* SetPixelShaderProgram(D3DPIXELSHADERDEF *): the register combiners. Kept for gpu.c, which approximates them. */
 void *nv_pixel_shader;
-void __stdcall D3D8__D3DDevice_SetPixelShaderProgram(int program) { nv_pixel_shader = (void *)program; }
+
+/* D3DPIXELSHADERDEF (Xbox) */
+typedef struct {
+    DWORD alpha_inputs[8], final_abcd, final_efg, constant0[8], constant1[8], alpha_outputs[8], rgb_inputs[8];
+    DWORD compare_mode, final_constant0, final_constant1, rgb_outputs[8], combiner_count, texture_modes, dot_mapping;
+    DWORD input_texture, c0_mapping, c1_mapping, final_constants;
+} XPixelShaderDef;
+
+void __stdcall D3D8__D3DDevice_SetPixelShaderProgram(int program)
+{
+    nv_pixel_shader = (void *)program;
+    static const void *seen[8];
+    static int count;
+    const XPixelShaderDef *ps = (const XPixelShaderDef *)program;
+    if (!ps || count >= 8)
+        return;
+    for (int i = 0; i < count; i++)
+        if (seen[i] == ps)
+            return;
+    seen[count++] = ps;
+    unsigned stages = ps->combiner_count & 0xff;
+    printf("[d3d] pixel shader %p: %u stages, texture modes %08lx, final ABCD %08lx EFG %08lx\n", (void *)ps, stages,
+           (unsigned long)ps->texture_modes, (unsigned long)ps->final_abcd, (unsigned long)ps->final_efg);
+    for (unsigned i = 0; i < stages && i < 8; i++)
+        printf("[d3d]   stage %u: rgb in %08lx out %08lx, alpha in %08lx out %08lx, c0 %08lx c1 %08lx\n", i,
+               (unsigned long)ps->rgb_inputs[i], (unsigned long)ps->rgb_outputs[i], (unsigned long)ps->alpha_inputs[i],
+               (unsigned long)ps->alpha_outputs[i], (unsigned long)ps->constant0[i], (unsigned long)ps->constant1[i]);
+}
 
 /* the push buffer is the CPU's own memory here: nothing to wait for */
 void __stdcall D3D8__D3D_KickOffAndWaitForIdle(void) {}
