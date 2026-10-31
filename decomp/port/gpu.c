@@ -595,14 +595,24 @@ void gpu_draw(int primitive, const GpuVertex *v, unsigned count)
             for (unsigned i = 0; i < n; i++)
                 scratch[i].t[s][0] /= (float)bound[s].width, scratch[i].t[s][1] /= (float)bound[s].height;
     combiners();
-    /* DRA2_FLAT=1: every draw in solid magenta with depth, blending, alpha test and textures off (is the geometry
-     * reaching the screen at all?) */
+    /* DRA2_FLAT=1: every draw in magenta with depth, blending and alpha test off (is the geometry reaching the
+     * screen at all?); 2: only the states off; 3: only the vertex colours white. The register combiners still run,
+     * so textures still show through. */
     static int flat = -1;
     if (flat < 0) {
-        char v[8];
-        flat = GetEnvironmentVariableA("DRA2_FLAT", v, sizeof v) > 0;
+        char v[8] = "";
+        flat = GetEnvironmentVariableA("DRA2_FLAT", v, sizeof v) > 0 ? atoi(v) : 0;
     }
-    if (flat) {
+    if (flat == 3)
+        for (unsigned i = 0; i < n; i++)
+            scratch[i].diffuse = 0xffffffff;
+    if (flat == 2) {
+        IDirect3DDevice9_SetRenderState(device, D3DRS_ZENABLE, D3DZB_FALSE);
+        IDirect3DDevice9_SetRenderState(device, D3DRS_ALPHABLENDENABLE, FALSE);
+        IDirect3DDevice9_SetRenderState(device, D3DRS_ALPHATESTENABLE, FALSE);
+        IDirect3DDevice9_SetRenderState(device, D3DRS_COLORWRITEENABLE, 0xf);
+    }
+    if (flat == 1) {
         IDirect3DDevice9 *d = device;
         IDirect3DDevice9_SetRenderState(d, D3DRS_ZENABLE, D3DZB_FALSE);
         IDirect3DDevice9_SetRenderState(d, D3DRS_ALPHABLENDENABLE, FALSE);
@@ -637,10 +647,11 @@ void gpu_draw(int primitive, const GpuVertex *v, unsigned count)
     }
 }
 
-/* DRA2_SNAPSHOT=<frame>,<path.bmp>: save that frame's back buffer, to look at the output without a screen capture */
+/* DRA2_SNAPSHOT=<frame>[:<step>],<path.bmp>: save that frame's back buffer (and every step frames after it), to look
+ * at the output without a screen capture. A %d in the path is replaced by the frame number. */
 static void snapshot(void)
 {
-    static int frame, target = -1;
+    static int frame, target = -1, step;
     static char path[MAX_PATH];
     if (target == -1) {
         char v[MAX_PATH + 16];
@@ -651,12 +662,18 @@ static void snapshot(void)
             if (comma) {
                 *comma = 0;
                 target = atoi(v);
+                char *colon = strchr(v, ':');
+                step = colon ? atoi(colon + 1) : 0;
                 strncpy(path, comma + 1, sizeof path - 1);
             }
         }
     }
     if (++frame != target || !path[0])
         return;
+    if (step > 0)
+        target += step;
+    char name[MAX_PATH + 16];
+    snprintf(name, sizeof name, path, frame);
     IDirect3DSurface9 *back = 0, *copy = 0;
     D3DSURFACE_DESC desc;
     if (FAILED(IDirect3DDevice9_GetBackBuffer(device, 0, 0, D3DBACKBUFFER_TYPE_MONO, &back)))
@@ -667,7 +684,7 @@ static void snapshot(void)
         SUCCEEDED(IDirect3DDevice9_GetRenderTargetData(device, back, copy))) {
         D3DLOCKED_RECT lr;
         if (SUCCEEDED(IDirect3DSurface9_LockRect(copy, &lr, 0, D3DLOCK_READONLY))) {
-            FILE *f = fopen(path, "wb");
+            FILE *f = fopen(name, "wb");
             if (f) {
                 BITMAPFILEHEADER fh = { 0 };
                 BITMAPINFOHEADER ih = { 0 };
@@ -680,7 +697,7 @@ static void snapshot(void)
                 for (UINT y = 0; y < desc.Height; y++)
                     fwrite((unsigned char *)lr.pBits + y * lr.Pitch, desc.Width * 4, 1, f);
                 fclose(f);
-                printf("[gpu] frame %d saved to %s\n", frame, path);
+                printf("[gpu] frame %d saved to %s\n", frame, name);
             }
             IDirect3DSurface9_UnlockRect(copy);
         }

@@ -566,6 +566,13 @@ def vcall_this(line, counter=None):
             k = matching_paren(line, j)
             if k > 0:
                 inner, after = line[j + 1:k], k + 1
+        elif re.match(r"\*\*\([\w ]+\*\*\)\(", line[j:]):
+            # slot 0 of the object stored at an address, (**(code **)**(undefined4 **)(param_1 + 0xcc))(obj, ...):
+            # the particle system's renderer got its arguments shifted by one, "this" among them
+            k = line.index("(", j + 2 + line[j + 2:].index(")") + 1)
+            close = matching_paren(line, k)
+            if close > 0:
+                inner, after = "*" + line[j + 1:close + 1], close + 1
         else:
             m = re.match(r"\*\s*\w+(?:\[[^\]]*\])?", line[j:])
             if m:
@@ -1048,9 +1055,24 @@ def join_wrapped_calls(lines):
     return out
 
 
+PLAIN_LABEL_SUM = re.compile(r"^\s*(return|\w+)\s*=?\s*(&_?DAT_[0-9a-f]{8}\s*[+-])")
+BYTE_POINTERS = {"undefined *", "undefined1 *", "char *", "byte *", "uchar *"}
+LOCAL_DECL = re.compile(r"^\s+((?:undefined1?|char|byte|uchar|\w+) \*)(\w+);")
+
+
 def preprocess(src, dst, class_methods=None):
     out = []
+    byte_return, local_types = False, {}
     for line in join_wrapped_calls(open(src, encoding="latin-1").readlines()):
+        # the function being read: its return type and its locals' types (for the label sums below)
+        if FUNC_HEADER.match(line.rstrip("\n")):
+            byte_return, local_types = False, {}
+        elif re.match(r"^[A-Za-z_]", line) and "(" in line and not line.rstrip().endswith(";"):
+            byte_return = re.match(r"^(?:undefined1?|char|byte|uchar) \*\s*(?:__\w+\s+)?[\w:]+\(", line) is not None
+        else:
+            d = LOCAL_DECL.match(line)
+            if d:
+                local_types[d.group(2)] = d.group(1)
         if line.startswith("#include"):
             line = '#include "program_types.h"\n#include "protos.h"\n#include "globals.h"\n'
         # 10-byte x87 values (returns, locals, casts) are floating point; float10 is what the code does with them
@@ -1080,6 +1102,13 @@ def preprocess(src, dst, class_methods=None):
         # "(undefined4 *)(&DAT_0031f9ec + iVar7)" was the second stream slot's OVERLAPPED, 3 * 0x93c bytes off.
         line = re.sub(r"((?:\*\s*)?\([^()]*\*\s*\)\s*\(\s*)&(_?(?:DAT|PTR)_[0-9a-f]{8})(\s*[+-])",
                       r"\1(undefined1 *)&\2\3", line)
+        # and with no cast at all, where the type Ghidra gave the sum shows the label is untyped (1 byte): the sum
+        # is returned as, or assigned to, a byte pointer. "return &DAT_0031f508 + param_1 * 0x9c;" (the pad state
+        # for a handle, in an "undefined *" function) went 4 * 0x9c bytes per pad, so pads 1 and 2 read other data
+        # and looked held down. "piVar1 = &DAT_002f7850 + param_1 * 3;" is an int label: an index, left alone.
+        m = PLAIN_LABEL_SUM.match(line)
+        if m and (byte_return if m.group(1) == "return" else local_types.get(m.group(1)) in BYTE_POINTERS):
+            line = line[:m.start(2)] + "(undefined1 *)" + line[m.start(2):]
         # MSVC C++ exception frames built by hand on the Xbox (fs:[0] chain + a pointer to the function's unwind
         # record in 0x1ee000-0x1fa000). A port doesn't use them: the frame links go, fs:[0] reads as 0, and the
         # unwind-record address becomes null. (unaff_FS_OFFSET is otherwise an uninitialised pointer.)

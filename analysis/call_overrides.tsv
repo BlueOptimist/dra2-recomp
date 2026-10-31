@@ -3,3 +3,4 @@ call	convention	return	params	note
 001589b1	__thiscall	int	pointer,int	FUN_00158930: pool->vf00(size); takes the same shared size push (edi) as the vf03 call at 001589aa
 000cc6de	__thiscall	void	pointer,int,float,float,float	MenuLegal::Setup: panel->vf13(6, position) with the position vector passed by value (sub esp,0Ch and three stores, no pushes), so the decompiler saw only the 6
 0016435d	__thiscall	void	pointer,pointer,pointer	FUN_00164310: child->vf03(&this->field_a4, this); both pushes (eax, esi) are arguments, the decompiler passed only the first and Class_2a6648::vf03 read garbage as its second
+00164aa6	__thiscall	int	pointer,undefined4,undefined4,float,undefined4,pointer	FUN_00164a00: renderer->vf00(first, last, elapsed, this->field_100, &position); five pushes (the elapsed time stored with fstps into the slot of a push), the decompiler passed two and Class_2a7f2c::vf00 pops 0x14

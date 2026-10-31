@@ -52,6 +52,9 @@ FIELD = (re.compile(r"^\s*(?:[A-Za-z_]\w*|\(.*\))\s*\[\s*(0x[0-9a-f]+|\d+)\s*\]\
          re.compile(r"^\s*\*\s*[A-Za-z_]\w*\s*$"))                                                 # *p: 0
 
 
+ROUNDED = re.compile(r"^[\s(]*(?:ROUND|TRUNC|CEIL|FLOOR)\s*\(")
+
+
 def field_offset(operand):
     """The byte offset of a field read "p[6]", "*(int *)(p + 0x18)", "*p"; None for anything else."""
     m = FIELD[0].match(operand)
@@ -136,6 +139,8 @@ def is_bit_copy(c, converts, operand=""):
     if target not in INT32_TYPES and c["target"] not in INT32_TYPES:
         return False
     if c["operand_alias"] not in FLOAT_TYPES and c["operand_type"] not in FLOAT_TYPES:
+        return False
+    if ROUNDED.match(operand):  # "(int)ROUND(x)": an x87 fist, a real conversion
         return False
     if not c["explicit"] and target == "undefined4":
         return True

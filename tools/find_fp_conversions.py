@@ -6,7 +6,7 @@ The decompiler prints a reinterpretation of 32 bits and a numeric conversion the
 assignment between an int and a float, so the C source alone can't tell "load a float through an int pointer" from
 "convert this integer" (FUN_0019ebb0 read a viewport rect of floats through an undefined4 pointer; the texture
 matrix's 1.0 became 1065353216.0). The machine code can: int -> float needs fild/fiadd/fisub/fimul/fidiv/ficom or an
-SSE cvtsi2ss/cvtdq2ps, float -> int needs fist/fistp/fisttp, cvt(t)ss2si/cvt(t)ps2dq or a call to the CRT's _ftol.
+SSE cvtsi2ss/cvtdq2ps; a float -> int printed as a plain cast needs an SSE cvt(t)ss2si/cvt(t)ps2dq (see TO_INT).
 A function with none of them only moves bits. tools/implicit_bits.py rewrites the conversions in such functions as bit
 copies.
 
@@ -23,9 +23,10 @@ import sys
 INSN = re.compile(r"^\s*([0-9a-f]+):\s+(\S+)\s*(.*?)\s*$")
 TO_FLOAT = ("fild", "fiadd", "fisub", "fisubr", "fimul", "fidiv", "fidivr", "ficom", "ficomp", "cvtsi2ss",
             "cvtsi2sd", "cvtdq2ps", "cvtpi2ps")
-TO_INT = ("fist", "fistp", "fisttp", "cvtss2si", "cvttss2si", "cvtsd2si", "cvttsd2si", "cvtps2dq", "cvttps2dq",
-          "cvtps2pi", "cvttps2pi")
-FTOL = 0x1dda70  # CRT _ftol (analysis/crt_signatures.tsv)
+# float -> int as the decompiler prints a plain cast "(int)x": the SSE conversions. An x87 fist/fistp prints as
+# "(int)ROUND(x)" and _ftol as a call, so a plain "(uint)local_12c" in a function with only those is a bit copy
+# (FUN_001a9fd0 stored its particle vertices as integers).
+TO_INT = ("cvtss2si", "cvttss2si", "cvtsd2si", "cvttsd2si", "cvtps2dq", "cvttps2dq", "cvtps2pi", "cvttps2pi")
 
 
 def main():
@@ -44,9 +45,8 @@ def main():
         if not m:
             continue
         op = m.group(2)  # AT&T spelling: fildl, fistpl, cvttss2si...
-        target = re.match(r"0x([0-9a-f]+)", m.group(3)) if op == "calll" else None
         to_float = op.startswith(TO_FLOAT)
-        to_int = op.startswith(TO_INT) or bool(target and int(target.group(1), 16) + base == FTOL)
+        to_int = op.startswith(TO_INT)
         loads_float = op == "flds"  # a 4-byte float load: which fields a function reads as floats
         if not (to_float or to_int or loads_float):
             continue
@@ -58,7 +58,8 @@ def main():
         f[0] |= to_float
         f[1] |= to_int
         # the displacement of a register-relative memory operand, "0x18(%eax)": a field the instruction reads
-        disp = re.match(r"(-?0x[0-9a-f]+|)\(%e[a-ds][xip]\)", m.group(3))
+        # (stack slots, %esp/%ebp-relative, are locals and arguments, not fields)
+        disp = re.match(r"(-?0x[0-9a-f]+|)\(%e(?:ax|bx|cx|dx|si|di)\)", m.group(3))
         if disp and op in ("fildl", "flds"):
             (f[2] if op == "fildl" else f[3]).add(int(disp.group(1) or "0", 16))
     with open(out, "w") as f:

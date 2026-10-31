@@ -4,6 +4,8 @@
 #include "nv2a.h"
 
 int printf(const char *format, ...);
+int atoi(const char *s);
+__declspec(dllimport) unsigned long __stdcall GetEnvironmentVariableA(const char *name, char *value, unsigned long size);
 
 NvAttribute nv_attributes[16];
 NvVec4 nv_attribute_defaults[16];
@@ -131,9 +133,26 @@ static void log_draw(const char *kind, unsigned prim, unsigned count)
         }
         nv_vsh_dump(nv_program_start, 20);
     }
-    if (draws_logged >= 3)
+    /* DRA2_LOGDRAW=<n>: log draws n..n+2 in full as well (the first three of the run always are) */
+    static int log_from = -1;
+    if (log_from < 0) {
+        char v[16] = "";
+        log_from = GetEnvironmentVariableA("DRA2_LOGDRAW", v, sizeof v) > 0 ? atoi(v) : 0;
+    }
+    int window = log_from > 0 && nv_draws >= log_from && nv_draws < log_from + 3;
+    if (draws_logged >= 3 && !window)
         return;
     draws_logged++;
+    if (window) {
+        nv_vsh_dump(nv_program_start, 40);
+        for (int r = -96; r < 96; r++) {
+            if (nv_draws != log_from && (r < 10 || r > 17))
+                continue;
+            const float *c = nv_constants[r + 96];
+            if (c[0] || c[1] || c[2] || c[3])
+                printf("[nv2a]   c%d: %g %g %g %g\n", r, c[0], c[1], c[2], c[3]);
+        }
+    }
     printf("[nv2a] %s primitive %u, %u vertices, program start %d\n", kind, prim, count, nv_program_start);
     for (int a = 0; a < 16; a++)
         if (nv_attributes[a].data && nv_attributes[a].count) {
