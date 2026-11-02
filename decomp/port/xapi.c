@@ -124,7 +124,9 @@ void *__stdcall XAPILIB__CreateMutexA(void *security, int owned, const char *nam
 void *__stdcall XAPILIB__CreateThread(void *security, DWORD stack, LPTHREAD_START_ROUTINE start, void *param,
                                       DWORD flags, DWORD *id)
 {
-    return CreateThread(security, stack, start, param, flags, id);
+    void *h = CreateThread(security, stack, start, param, flags, id);
+    printf("[xapi] CreateThread(%p, %p) -> %p\n", (void *)start, param, h);
+    return h;
 }
 
 unsigned char __stdcall XAPILIB__SetEvent(void *h) { return SetEvent(h) != 0; }

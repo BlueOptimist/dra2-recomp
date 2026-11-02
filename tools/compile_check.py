@@ -577,6 +577,12 @@ def vcall_this(line, counter=None):
             m = re.match(r"\*\s*\w+(?:\[[^\]]*\])?", line[j:])
             if m:
                 inner, after = m.group(0), j + m.end()
+        # "(obj->slot00_174110 + 0xc)": an object pointer the decompiler typed as its vtable, so its first word
+        # (the vtable pointer) reads as slot 0; "+ 0xc" is the method. The sound voice's volume setter ran with
+        # no "this" (102 calls)
+        sm = re.fullmatch(r"\s*(.+?)->slot00_[0-9a-f]+\s*\+\s*(.+?)\s*", inner) if inner else None
+        if sm and not sm.group(1).lstrip().startswith("*") and sm.group(1).count("(") == sm.group(1).count(")"):
+            inner = f"*({sm.group(1).strip()}) + {sm.group(2)}"
         if inner is None or not inner.strip().startswith("*") or line[after:after + 2] != ")(":
             out.append(line[pos:j])
             pos = j

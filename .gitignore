@@ -30,6 +30,7 @@
 !/decomp/port/startup.c
 !/decomp/port/crash.c
 !/decomp/port/d3d8.c
+!/decomp/port/dsound.c
 !/decomp/port/gpu.c
 !/decomp/port/nv2a.c
 !/decomp/port/nv2a.h

@@ -151,6 +151,43 @@ void __thiscall Class_2a6648__vf03(unsigned char *this, void *pool, unsigned cha
 #undef F
 }
 
+/* replaces 000ccb60: places a transform (param_1, a matrix set to a translation by FUN_001ca060) just beside the
+ * scene camera: at the camera's position + tan(fov * DAT_002f707c / 2) * -1/6 along x. The decompiled body passed the
+ * return address as the matrix (unaff_retaddr) and its stack temporaries as the position; the attract mode's loading
+ * screen wrote to address 3. */
+extern void *DAT_002f7f50;
+extern float _DAT_002f707c;
+double tan(double x);
+unsigned __fastcall FUN_00149f10(int self);
+void __thiscall FUN_001ca060(void *matrix, unsigned *position);
+
+void FUN_000ccb60(unsigned param_1)
+{
+    void **camera = (void **)FUN_00149f10(*(int *)((char *)DAT_002f7f50 + 0xb4));
+    if (!camera)
+        return;
+    void **vtable = *(void ***)camera;
+    float fov = ((float(__thiscall *)(void *))vtable[0x54 / 4])(camera);
+    float offset = (float)tan(fov * _DAT_002f707c * 0.5f) * -0.16666667f;
+    float tmp[3];
+    float *at = ((float *(__thiscall *)(void *, float *))vtable[0x1c / 4])(camera, tmp);
+    float position[3] = { at[0] + offset, at[1], at[2] };
+    FUN_001ca060((void *)param_1, (unsigned *)position);
+}
+
+/* replaces 0014a8d0 Class_2a3c90::vf06: a sound voice's pan, clamped to [-1, 1] (fcmovb/fcmovnbe), stored at +0x34
+ * with change flag 0x10. The decompiled body stored the float through the class's vtable pointer type, which C
+ * can't cast, so it was a stub and the first sound played in 3D trapped. */
+void __thiscall Class_2a3c90__vf06(unsigned char *this, float pan)
+{
+    if (pan < -1.0f)
+        pan = -1.0f;
+    if (pan > 1.0f)
+        pan = 1.0f;
+    *(float *)(this + 0x34) = pan;
+    *(unsigned *)(this + 0x14) |= 0x10;
+}
+
 /* replaces 001cccf0: keeps the scheduler's task list (circular, doubly linked: next at +4, prev at +8, the head
  * itself the sentinel) sorted by priority (+0x14). When it's out of order: unlink the ring, merge sort it
  * (FUN_001ccc30, singly linked through +4), store the result as head->next and rebuild the prev links. The decompiled

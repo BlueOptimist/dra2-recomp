@@ -44,6 +44,9 @@ int main(int argc, char **argv)
         if (address == 0 || address == 0xffffffffu)
             continue;
         if (is_xbox_address(address)) {
+            if (trace)
+                printf("[port] init skipped: table slot %#x -> Xbox %#x\n",
+                       0x2bf870 + 4 * (unsigned)(entry - DAT_002bf870), address);
             skipped++;
             continue;
         }
