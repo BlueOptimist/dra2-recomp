@@ -119,16 +119,24 @@ static void pump_messages(void)
  * width-1, height-1 and pitch/64-1 in Size. */
 typedef struct { DWORD Common, Data, Lock, Format, Size; } XTexture;
 
+/* Decoded textures, found again by the Xbox header's Data, Format and Size. The game builds textures every frame
+ * (text, per-frame effects) in memory it frees and reuses, so an entry is re-decoded when a sample of its source
+ * changes, and the least recently used one gives way when the cache is full: it used to fill up, and every texture
+ * after that drew as none. */
 typedef struct {
     DWORD data, format, size;
     IDirect3DTexture9 *texture;
     unsigned width, height;
-    int linear;  /* linear textures are addressed in texels, swizzled ones 0..1 */
+    int linear;          /* linear textures are addressed in texels, swizzled ones 0..1 */
+    unsigned bytes;      /* the source's size */
+    DWORD sum;           /* a sample of the source, to notice it was rewritten */
+    unsigned last_used;  /* the frame it was last bound in */
 } CachedTexture;
 
 static CachedTexture cache[1024];
 static int cache_count;
-static struct { IDirect3DTexture9 *texture; unsigned width, height; int linear; } bound[4];
+static unsigned texture_frame;
+static struct { IDirect3DTexture9 *texture; unsigned width, height; int linear; const void *xbox; } bound[4];
 
 /* swizzled (Morton) order: bits of x and y interleaved, x first, while both dimensions have bits left */
 static unsigned swizzle(unsigned x, unsigned y, unsigned w, unsigned h)
@@ -173,16 +181,56 @@ static int texel(unsigned format, const unsigned char *p, DWORD *out)
     return 0;
 }
 
+/* 32 dwords spread over the source */
+static DWORD source_sum(const CachedTexture *c)
+{
+    const DWORD *p = (const DWORD *)c->data;
+    unsigned words = c->bytes / 4, step = words > 32 ? words / 32 : 1;
+    DWORD s = 0;
+    for (unsigned i = 0; i < words && i < 32 * step; i += step)
+        s = s * 31 + p[i];
+    return s;
+}
+
+static void decode(CachedTexture *c, const XTexture *x);
+
 static CachedTexture *texture_for(const XTexture *x)
 {
-    for (int i = 0; i < cache_count; i++)
-        if (cache[i].data == x->Data && cache[i].format == x->Format && cache[i].size == x->Size)
-            return &cache[i];
-    if (cache_count == (int)(sizeof cache / sizeof *cache) || !x->Data)
+    if (!x->Data)
         return 0;
-    CachedTexture *c = &cache[cache_count++];
+    CachedTexture *c = 0;
+    for (int i = 0; i < cache_count && !c; i++)
+        if (cache[i].data == x->Data && cache[i].format == x->Format && cache[i].size == x->Size)
+            c = &cache[i];
+    if (c && c->bytes && source_sum(c) == c->sum) {
+        c->last_used = texture_frame;
+        return c;
+    }
+    if (!c && cache_count < (int)(sizeof cache / sizeof *cache))
+        c = &cache[cache_count++];
+    if (!c) {  /* full: the least recently used entry goes */
+        c = &cache[0];
+        for (int i = 1; i < cache_count; i++)
+            if (cache[i].last_used < c->last_used)
+                c = &cache[i];
+    }
+    if (c->texture) {
+        for (int s = 0; s < 4; s++)
+            if (bound[s].texture == c->texture)
+                bound[s].texture = 0, IDirect3DDevice9_SetTexture(device, (DWORD)s, 0);
+        IDirect3DTexture9_Release(c->texture);
+    }
     memset(c, 0, sizeof *c);
     c->data = x->Data, c->format = x->Format, c->size = x->Size;
+    c->last_used = texture_frame;
+    decode(c, x);
+    if (c->bytes)
+        c->sum = source_sum(c);
+    return c;
+}
+
+static void decode(CachedTexture *c, const XTexture *x)
+{
     unsigned format = (x->Format >> 8) & 0xff;
     unsigned w, h, pitch = 0;
     if (x->Size) {
@@ -197,14 +245,15 @@ static CachedTexture *texture_for(const XTexture *x)
         D3DFORMAT f = format == 0x0c ? D3DFMT_DXT1 : format == 0x0e ? D3DFMT_DXT3 : D3DFMT_DXT5;
         unsigned block = format == 0x0c ? 8 : 16, bw = (w + 3) / 4, bh = (h + 3) / 4;
         if (FAILED(IDirect3DDevice9_CreateTexture(device, w, h, 1, 0, f, D3DPOOL_MANAGED, &c->texture, 0)))
-            return c;
+            return;
         D3DLOCKED_RECT lr;
         if (SUCCEEDED(IDirect3DTexture9_LockRect(c->texture, 0, &lr, 0, 0))) {
             for (unsigned by = 0; by < bh; by++)
                 memcpy((unsigned char *)lr.pBits + by * lr.Pitch, src + by * bw * block, bw * block);
             IDirect3DTexture9_UnlockRect(c->texture, 0);
         }
-        return c;
+        c->bytes = bw * bh * block;
+        return;
     }
     DWORD probe;
     int bpp = texel(format, src, &probe);
@@ -212,10 +261,11 @@ static CachedTexture *texture_for(const XTexture *x)
         static unsigned warned[256];
         if (!warned[format]++)
             printf("[gpu] texture format %#x not decoded yet (%ux%u)\n", format, w, h);
-        return c;
+        return;
     }
     if (FAILED(IDirect3DDevice9_CreateTexture(device, w, h, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &c->texture, 0)))
-        return c;
+        return;
+    c->bytes = c->linear ? pitch * h : w * h * (unsigned)bpp;
     D3DLOCKED_RECT lr;
     if (SUCCEEDED(IDirect3DTexture9_LockRect(c->texture, 0, &lr, 0, 0))) {
         for (unsigned y = 0; y < h; y++) {
@@ -227,8 +277,10 @@ static CachedTexture *texture_for(const XTexture *x)
         }
         IDirect3DTexture9_UnlockRect(c->texture, 0);
     }
-    return c;
 }
+
+/* the Xbox texture last bound to a stage (D3DDevice_GetTexture2) */
+const void *gpu_get_texture(int stage) { return stage >= 0 && stage < 4 ? bound[stage].xbox : 0; }
 
 void gpu_set_texture(int stage, const void *xbox_texture)
 {
@@ -238,6 +290,7 @@ void gpu_set_texture(int stage, const void *xbox_texture)
     bound[stage].texture = c ? c->texture : 0;
     bound[stage].width = c ? c->width : 1, bound[stage].height = c ? c->height : 1;
     bound[stage].linear = c ? c->linear : 0;
+    bound[stage].xbox = xbox_texture;
     IDirect3DDevice9_SetTexture(device, (DWORD)stage, (IDirect3DBaseTexture9 *)bound[stage].texture);
 }
 
@@ -629,7 +682,13 @@ void gpu_draw(int primitive, const GpuVertex *v, unsigned count)
     if (logged % 10000 == 9999)
         printf("[gpu] draw %d: first vertex %.1f %.1f %.3f rhw %.3f\n", logged + 1, scratch[0].x, scratch[0].y,
                scratch[0].z, scratch[0].rhw);
-    if (logged++ < 3 || FAILED(hr)) {
+    /* DRA2_LOGFRAME=<frame>: every draw of that frame in full, as for the first three */
+    static int log_frame = -1;
+    if (log_frame < 0) {
+        char v[16] = "";
+        log_frame = GetEnvironmentVariableA("DRA2_LOGFRAME", v, sizeof v) > 0 ? atoi(v) : 0;
+    }
+    if (logged++ < 3 || FAILED(hr) || (log_frame && texture_frame + 1 == (unsigned)log_frame)) {
         DWORD at, ab, zf, cw, ze, ar, af;
         IDirect3DDevice9_GetRenderState(device, D3DRS_ALPHATESTENABLE, &at);
         IDirect3DDevice9_GetRenderState(device, D3DRS_ALPHAREF, &ar);
@@ -709,6 +768,7 @@ static void snapshot(void)
 
 void gpu_present(void)
 {
+    texture_frame++;
     if (device) {
         if (in_scene) {
             IDirect3DDevice9_EndScene(device);

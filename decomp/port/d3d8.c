@@ -493,6 +493,10 @@ void __stdcall D3D8__D3DDevice_SetRenderState_CullMode(int mode) { (void)mode; }
 
 void __stdcall D3D8__D3DDevice_SetTexture(int stage, int *texture) { gpu_set_texture(stage, texture); }
 
+/* the texture bound to a stage, without a reference (the game compares it before freeing its per-frame textures) */
+const void *gpu_get_texture(int stage);
+int __stdcall D3D8__D3DDevice_GetTexture2(int stage) { return (int)gpu_get_texture(stage); }
+
 /* the fixed-function transforms: kept for FVF draws that need them (none drawn yet) */
 static float transforms[32][16];
 void __stdcall D3D8__D3DDevice_SetTransform(int state, float *matrix)

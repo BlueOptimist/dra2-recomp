@@ -1375,7 +1375,12 @@ def main():
         int_locals = set(re.findall(r"^\s+(?:int|uint|undefined4|dword)\s+(\w+)\s*;", func, re.M))
         views = {m.group(2) for m in re.finditer(rf"^\s+(\w+)\s*=\s*{_G}\s*;", func, re.M) if m.group(1) in int_locals}
         views |= set(re.findall(rf"\((?:int|uint)\)\s*{_G}\b", func))
-        return views & scaled
+        # but a label the function dereferences ("*G = x", "G[i]") is a pointer there: Ghidra writes "(int)G" because
+        # of that, and its "G + 1" is one element. The global light table's end pointer advanced one byte per light
+        # ("DAT_0031565c = (int)DAT_0031565c + 1"), so every light lookup failed and lit objects drew black.
+        derefs = set(re.findall(rf"(?<![\w)\]])\*\s*{_G}\b(?!\s*[+-])", func))
+        derefs |= set(re.findall(rf"(?<![\w.>]){_G}\s*(?:\[|->)", func))
+        return (views - derefs) & scaled
 
     # "*(int *)(G + 4)": a cast dereference of an offset label is a byte offset (for an int * the decompiler would
     # print G[1]), whatever type the label got here. Declared int *, C read G + 0x10.

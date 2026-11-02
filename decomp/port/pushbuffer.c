@@ -133,13 +133,16 @@ static void log_draw(const char *kind, unsigned prim, unsigned count)
         }
         nv_vsh_dump(nv_program_start, 20);
     }
-    /* DRA2_LOGDRAW=<n>: log draws n..n+2 in full as well (the first three of the run always are) */
-    static int log_from = -1;
+    /* DRA2_LOGDRAW=<n>[:<count>]: log draws n.. (3 by default) in full as well (the first three of the run always are) */
+    static int log_from = -1, log_count = 3;
     if (log_from < 0) {
         char v[16] = "";
         log_from = GetEnvironmentVariableA("DRA2_LOGDRAW", v, sizeof v) > 0 ? atoi(v) : 0;
+        for (char *p = v; *p; p++)
+            if (*p == ':')
+                log_count = atoi(p + 1);
     }
-    int window = log_from > 0 && nv_draws >= log_from && nv_draws < log_from + 3;
+    int window = log_from > 0 && nv_draws >= log_from && nv_draws < log_from + log_count;
     if (draws_logged >= 3 && !window)
         return;
     draws_logged++;
