@@ -85,6 +85,19 @@ static void begin_scene(void)
         in_scene = 1;
 }
 
+static unsigned texture_frame;
+
+/* DRA2_LOGFRAME=<frame>: every clear and draw of that frame in full */
+static int log_frame_now(void)
+{
+    static int log_frame = -1;
+    if (log_frame < 0) {
+        char v[16] = "";
+        log_frame = GetEnvironmentVariableA("DRA2_LOGFRAME", v, sizeof v) > 0 ? atoi(v) : 0;
+    }
+    return log_frame && texture_frame + 1 == (unsigned)log_frame;
+}
+
 /* Clear with Xbox flags: D3DCLEAR_ZBUFFER 1, STENCIL 2, TARGET_R/G/B/A 0x10-0x80 */
 void gpu_clear(int count, const long *rects, unsigned flags, unsigned color, float z, unsigned stencil)
 {
@@ -99,6 +112,8 @@ void gpu_clear(int count, const long *rects, unsigned flags, unsigned color, flo
         d9 |= D3DCLEAR_STENCIL;
     if (!d9)
         return;
+    if (log_frame_now())
+        printf("[gpu] clear flags %x colour %08x z %g (%d rects)\n", flags, color, z, rects ? count : 0);
     begin_scene();
     IDirect3DDevice9_Clear(device, rects ? (DWORD)count : 0, (const D3DRECT *)(rects ? rects : 0), d9, color, z,
                            stencil);
@@ -135,7 +150,6 @@ typedef struct {
 
 static CachedTexture cache[1024];
 static int cache_count;
-static unsigned texture_frame;
 static struct { IDirect3DTexture9 *texture; unsigned width, height; int linear; const void *xbox; } bound[4];
 
 /* swizzled (Morton) order: bits of x and y interleaved, x first, while both dimensions have bits left */
@@ -281,6 +295,94 @@ static void decode(CachedTexture *c, const XTexture *x)
 
 /* the Xbox texture last bound to a stage (D3DDevice_GetTexture2) */
 const void *gpu_get_texture(int stage) { return stage >= 0 && stage < 4 ? bound[stage].xbox : 0; }
+
+/* one 4x4 DXT1/3/5 block to ARGB (for dump_texture only: the game's DXT textures go to Direct3D as they are) */
+static void dxt_block(D3DFORMAT f, const unsigned char *b, DWORD out[16])
+{
+    const unsigned char *c = f == D3DFMT_DXT1 ? b : b + 8;
+    WORD c0 = (WORD)(c[0] | c[1] << 8), c1 = (WORD)(c[2] | c[3] << 8);
+    DWORD pal[4];
+    for (int k = 0; k < 2; k++) {
+        WORD w = k ? c1 : c0;
+        pal[k] = 0xff000000 | expand(w >> 11, 5) << 16 | expand((w >> 5) & 63, 6) << 8 | expand(w & 31, 5);
+    }
+    for (int ch = 0; ch < 3; ch++) {
+        DWORD a = (pal[0] >> (8 * ch)) & 0xff, z = (pal[1] >> (8 * ch)) & 0xff;
+        DWORD m2 = c0 > c1 || f != D3DFMT_DXT1 ? (2 * a + z) / 3 : (a + z) / 2;
+        DWORD m3 = c0 > c1 || f != D3DFMT_DXT1 ? (a + 2 * z) / 3 : 0;
+        pal[2] = (pal[2] & ~(0xffu << (8 * ch))) | m2 << (8 * ch);
+        pal[3] = (pal[3] & ~(0xffu << (8 * ch))) | m3 << (8 * ch);
+    }
+    pal[2] |= 0xff000000, pal[3] = f == D3DFMT_DXT1 && c0 <= c1 ? pal[3] & 0xffffff : pal[3] | 0xff000000;
+    DWORD bits = (DWORD)c[4] | c[5] << 8 | c[6] << 16 | (DWORD)c[7] << 24;
+    for (int i = 0; i < 16; i++) {
+        DWORD p = pal[(bits >> (2 * i)) & 3], a = p >> 24;
+        if (f == D3DFMT_DXT3)
+            a = ((b[i / 2] >> (4 * (i & 1))) & 15) * 17;
+        else if (f == D3DFMT_DXT5) {
+            DWORD a0 = b[0], a1 = b[1], code = 0;
+            unsigned long long ab = 0;
+            for (int k = 0; k < 6; k++)
+                ab |= (unsigned long long)b[2 + k] << (8 * k);
+            code = (DWORD)(ab >> (3 * i)) & 7;
+            a = code == 0 ? a0 : code == 1 ? a1 : a0 > a1 ? ((8 - code) * a0 + (code - 1) * a1) / 7
+                : code == 6 ? 0 : code == 7 ? 255 : ((6 - code) * a0 + (code - 1) * a1) / 5;
+        }
+        out[i] = (p & 0xffffff) | a << 24;
+    }
+}
+
+/* with DRA2_LOGFRAME: each texture the frame draws with, as %TEMP%\dra2_tex_<address>.bmp (ARGB, alpha kept) */
+static void dump_texture(IDirect3DTexture9 *t, const void *xbox)
+{
+    static IDirect3DTexture9 *done[64];
+    static int ndone;
+    for (int i = 0; i < ndone; i++)
+        if (done[i] == t)
+            return;
+    if (ndone < 64)
+        done[ndone++] = t;
+    D3DSURFACE_DESC desc;
+    D3DLOCKED_RECT lr;
+    int dxt = 0;
+    if (SUCCEEDED(IDirect3DTexture9_GetLevelDesc(t, 0, &desc)))
+        dxt = desc.Format == D3DFMT_DXT1 || desc.Format == D3DFMT_DXT3 || desc.Format == D3DFMT_DXT5;
+    if ((desc.Format != D3DFMT_A8R8G8B8 && !dxt) || FAILED(IDirect3DTexture9_LockRect(t, 0, &lr, 0, D3DLOCK_READONLY))) {
+        printf("[gpu]   texture %p: Xbox format %#lx (not dumped)\n", (void *)t,
+               xbox ? (unsigned long)((const XTexture *)xbox)->Format : 0ul);
+        return;
+    }
+    char path[MAX_PATH], dir[MAX_PATH];
+    GetEnvironmentVariableA("TEMP", dir, sizeof dir);
+    snprintf(path, sizeof path, "%s\\dra2_tex_%p.bmp", dir, (void *)t);
+    FILE *f = fopen(path, "wb");
+    if (f) {
+        BITMAPFILEHEADER fh = { 0 };
+        BITMAPINFOHEADER ih = { 0 };
+        DWORD size = desc.Width * desc.Height * 4;
+        fh.bfType = 0x4d42, fh.bfOffBits = sizeof fh + sizeof ih, fh.bfSize = fh.bfOffBits + size;
+        ih.biSize = sizeof ih, ih.biWidth = (LONG)desc.Width, ih.biHeight = -(LONG)desc.Height;
+        ih.biPlanes = 1, ih.biBitCount = 32, ih.biCompression = BI_RGB;
+        fwrite(&fh, sizeof fh, 1, f);
+        fwrite(&ih, sizeof ih, 1, f);
+        for (UINT y = 0; y < desc.Height; y++) {
+            if (!dxt) {
+                fwrite((unsigned char *)lr.pBits + y * lr.Pitch, desc.Width * 4, 1, f);
+                continue;
+            }
+            for (UINT x = 0; x < desc.Width; x += 4) {
+                DWORD block[16];
+                unsigned size = desc.Format == D3DFMT_DXT1 ? 8 : 16;
+                dxt_block(desc.Format, (unsigned char *)lr.pBits + (y / 4) * lr.Pitch + (x / 4) * size, block);
+                fwrite(block + (y & 3) * 4, 4, desc.Width - x < 4 ? desc.Width - x : 4, f);
+            }
+        }
+        fclose(f);
+        printf("[gpu]   texture %p: Xbox format %#lx, saved to %s\n", (void *)t,
+               xbox ? (unsigned long)((const XTexture *)xbox)->Format : 0ul, path);
+    }
+    IDirect3DTexture9_UnlockRect(t, 0);
+}
 
 void gpu_set_texture(int stage, const void *xbox_texture)
 {
@@ -649,7 +751,7 @@ void gpu_draw(int primitive, const GpuVertex *v, unsigned count)
                 scratch[i].t[s][0] /= (float)bound[s].width, scratch[i].t[s][1] /= (float)bound[s].height;
     combiners();
     /* DRA2_FLAT=1: every draw in magenta with depth, blending and alpha test off (is the geometry reaching the
-     * screen at all?); 2: only the states off; 3: only the vertex colours white. The register combiners still run,
+     * screen at all?); 2: only the states off; 3: only the vertex colours white; 4: only the depth test off. The register combiners still run,
      * so textures still show through. */
     static int flat = -1;
     if (flat < 0) {
@@ -659,6 +761,8 @@ void gpu_draw(int primitive, const GpuVertex *v, unsigned count)
     if (flat == 3)
         for (unsigned i = 0; i < n; i++)
             scratch[i].diffuse = 0xffffffff;
+    if (flat == 4)
+        IDirect3DDevice9_SetRenderState(device, D3DRS_ZENABLE, D3DZB_FALSE);
     if (flat == 2) {
         IDirect3DDevice9_SetRenderState(device, D3DRS_ZENABLE, D3DZB_FALSE);
         IDirect3DDevice9_SetRenderState(device, D3DRS_ALPHABLENDENABLE, FALSE);
@@ -682,13 +786,7 @@ void gpu_draw(int primitive, const GpuVertex *v, unsigned count)
     if (logged % 10000 == 9999)
         printf("[gpu] draw %d: first vertex %.1f %.1f %.3f rhw %.3f\n", logged + 1, scratch[0].x, scratch[0].y,
                scratch[0].z, scratch[0].rhw);
-    /* DRA2_LOGFRAME=<frame>: every draw of that frame in full, as for the first three */
-    static int log_frame = -1;
-    if (log_frame < 0) {
-        char v[16] = "";
-        log_frame = GetEnvironmentVariableA("DRA2_LOGFRAME", v, sizeof v) > 0 ? atoi(v) : 0;
-    }
-    if (logged++ < 3 || FAILED(hr) || (log_frame && texture_frame + 1 == (unsigned)log_frame)) {
+    if (logged++ < 3 || FAILED(hr) || log_frame_now()) {
         DWORD at, ab, zf, cw, ze, ar, af;
         IDirect3DDevice9_GetRenderState(device, D3DRS_ALPHATESTENABLE, &at);
         IDirect3DDevice9_GetRenderState(device, D3DRS_ALPHAREF, &ar);
@@ -703,6 +801,18 @@ void gpu_draw(int primitive, const GpuVertex *v, unsigned count)
         printf("[gpu]   texture0 %p %ux%u linear %d; alpha test %lu (func %lu ref %lu) blend %lu z %lu func %lu "
                "color write %lx\n", (void *)bound[0].texture, bound[0].width, bound[0].height, bound[0].linear,
                at, af, ar, ab, ze, zf, cw);
+        if (log_frame_now()) {
+            DWORD sb, db, op;
+            IDirect3DDevice9_GetRenderState(device, D3DRS_SRCBLEND, &sb);
+            IDirect3DDevice9_GetRenderState(device, D3DRS_DESTBLEND, &db);
+            IDirect3DDevice9_GetRenderState(device, D3DRS_BLENDOP, &op);
+            const PixelShaderDef *ps = (const PixelShaderDef *)nv_pixel_shader;
+            printf("[gpu]   blend %lu %lu op %lu, pixel shader %p c0 %08lx c1 %08lx final %08lx %08lx\n", sb, db, op, (const void *)ps,
+                   ps ? (unsigned long)ps->constant0[0] : 0ul, ps ? (unsigned long)ps->constant1[0] : 0ul,
+                   ps ? (unsigned long)ps->final_constant0 : 0ul, ps ? (unsigned long)ps->final_constant1 : 0ul);
+            if (bound[0].texture)
+                dump_texture(bound[0].texture, bound[0].xbox);
+        }
     }
 }
 

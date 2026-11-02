@@ -1061,6 +1061,7 @@ def join_wrapped_calls(lines):
     return out
 
 
+DENORMAL = re.compile(r"(?<![\w.])(?<!case )(?<!case -)\d\.\d+e-(?:39|4[0-5])\b")  # not case labels: CASE_FLOAT
 PLAIN_LABEL_SUM = re.compile(r"^\s*(return|\w+)\s*=?\s*(&_?DAT_[0-9a-f]{8}\s*[+-])")
 BYTE_POINTERS = {"undefined *", "undefined1 *", "char *", "byte *", "uchar *"}
 LOCAL_DECL = re.compile(r"^\s+((?:undefined1?|char|byte|uchar|\w+) \*)(\w+);")
@@ -1088,6 +1089,9 @@ def preprocess(src, dst, class_methods=None):
         line = SWITCH_LINE.sub(r"\1switch((int)(\2)) {", line)
         line = CASE_FLOAT.sub(r"case \1:", CASE_POINTER.sub(r"case \1:", line))
         line = re.sub(r"\bNAN\b(?!\s*\()", '__builtin_nanf("")', line)
+        # a denormal float constant is a small integer seen as a float ("if (mode == 7.00649e-43) mode = 7.00649e-45"
+        # is "500 -> 5"); six digits don't round back to the same bits, so the test never matched. Exact bits.
+        line = DENORMAL.sub(lambda m: f"ghidra_bits_float({round(float(m.group(0)) / 2.0 ** -149)})", line)
         # SetRenderState_Simple's first argument is an NV2A method header, (count << 18) | method: 0x4035c reads like
         # a code address, so the decompiler names whatever function starts there (FUN_0004035c, thunk_FUN_0003d050
         # at 0x40354). The port's copy of that function lives elsewhere: the argument is the number itself.
