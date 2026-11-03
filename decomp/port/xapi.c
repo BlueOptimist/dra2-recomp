@@ -725,9 +725,11 @@ DWORD __stdcall XAPILIB__XCalculateSignatureEnd(signature_ctx *ctx, unsigned cha
 /* Windows XInput (xinput1_4.dll, else xinput9_1_0.dll), loaded on first use. Xbox gamepads have analog face
  * buttons and Black/White; they map to the Windows pad's buttons (255 when pressed) and shoulder buttons. */
 
-/* the device-type descriptors the game passes to XGetDevices / XInputOpen (compared by address) */
+/* the device-type descriptors the game passes to XGetDevices / XInputOpen (compared by address): ours in the
+ * recompiled build; the native build (port/native.c) points port_gamepad_type at the Xbox's own, 0x28ab14 */
 unsigned char XAPILIB__g_DeviceType_Gamepad[64];
 unsigned char XAPILIB__g_DeviceType_MU[64];
+void *port_gamepad_type = XAPILIB__g_DeviceType_Gamepad;
 
 typedef struct { WORD wButtons; BYTE bLeftTrigger, bRightTrigger; short sThumbLX, sThumbLY, sThumbRX, sThumbRY; }
     WIN_GAMEPAD;
@@ -771,9 +773,9 @@ static DWORD connected_pads(void)
         return mask;
     next_poll = now + frequency / 2;
     WIN_STATE st;
-    mask = 0;
+    mask = 1;  /* player 1 is always there: the keyboard, merged with the first Windows controller */
     if (xinput_ready())
-        for (DWORD i = 0; i < 4; i++)
+        for (DWORD i = 1; i < 4; i++)
             if (win_get_state(i, &st) == ERROR_SUCCESS)
                 mask |= 1u << i;
     return mask;
@@ -785,7 +787,7 @@ void __stdcall XAPILIB__XInitDevices(DWORD count, void *types) { (void)count, (v
 
 DWORD __stdcall XAPILIB__XGetDevices(void *type)
 {
-    if (type != XAPILIB__g_DeviceType_Gamepad)
+    if (type != port_gamepad_type)
         return 0;  /* no memory units: saves go to u:\ */
     return last_pads = connected_pads();
 }
@@ -793,7 +795,7 @@ DWORD __stdcall XAPILIB__XGetDevices(void *type)
 unsigned char __stdcall XAPILIB__XGetDeviceChanges(void *type, DWORD *inserted, DWORD *removed)
 {
     *inserted = *removed = 0;
-    if (type != XAPILIB__g_DeviceType_Gamepad)
+    if (type != port_gamepad_type)
         return 0;
     DWORD now = connected_pads();
     *inserted = now & ~last_pads;
@@ -806,19 +808,75 @@ unsigned char __stdcall XAPILIB__XGetDeviceChanges(void *type, DWORD *inserted, 
 void *__stdcall XAPILIB__XInputOpen(void *type, DWORD port, DWORD slot, void *polling)
 {
     (void)slot, (void)polling;
-    if (type != XAPILIB__g_DeviceType_Gamepad || port > 3 || !(connected_pads() & (1u << port)))
+    if (type != port_gamepad_type || port > 3 || !(connected_pads() & (1u << port)))
         return 0;
     return (void *)(port + 1);
 }
 
 void __stdcall XAPILIB__XInputClose(void *handle) { (void)handle; }
 
+/* Player 1 on the keyboard, read only while the game's window has the focus:
+ *   arrows        d-pad and left stick      Z X C V    A B X Y
+ *   I J K L       right stick               Q W        left and right triggers
+ *   Enter         Start                     E R        White and Black
+ *   Esc, Backspace Back
+ * The keys are merged into the first Windows controller's state (either one works). */
+WINIMPORT short WINAPI GetAsyncKeyState(int key);
+WINIMPORT HWND WINAPI GetForegroundWindow(void);
+WINIMPORT DWORD WINAPI GetWindowThreadProcessId(HWND window, DWORD *process);
+WINIMPORT DWORD WINAPI GetCurrentProcessId(void);
+
+static int key(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
+
+static void keyboard_pad(WIN_STATE *st)
+{
+    DWORD owner = 0;
+    HWND focus = GetForegroundWindow();
+    if (!focus || (GetWindowThreadProcessId(focus, &owner), owner != GetCurrentProcessId()))
+        return;
+    static const struct { int vk; WORD bit; } buttons[] = {
+        { 0x26, 0x0001 }, { 0x28, 0x0002 }, { 0x25, 0x0004 }, { 0x27, 0x0008 },  /* arrows: d-pad */
+        { 0x0d, 0x0010 }, { 0x1b, 0x0020 }, { 0x08, 0x0020 },                    /* Enter: Start; Esc, Backspace: Back */
+        { 'Z', 0x1000 }, { 'X', 0x2000 }, { 'C', 0x4000 }, { 'V', 0x8000 },      /* A B X Y */
+        { 'E', 0x0100 }, { 'R', 0x0200 },                                        /* White, Black (the shoulders) */
+    };
+    WORD before = st->Gamepad.wButtons;
+    for (unsigned k = 0; k < sizeof buttons / sizeof buttons[0]; k++)
+        if (key(buttons[k].vk))
+            st->Gamepad.wButtons |= buttons[k].bit;
+    if (key('Q'))
+        st->Gamepad.bLeftTrigger = 255;
+    if (key('W'))
+        st->Gamepad.bRightTrigger = 255;
+    int lx = key(0x27) - key(0x25), ly = key(0x26) - key(0x28), rx = key('L') - key('J'), ry = key('I') - key('K');
+    if (lx)
+        st->Gamepad.sThumbLX = (short)(lx * 32767);
+    if (ly)
+        st->Gamepad.sThumbLY = (short)(ly * 32767);
+    if (rx)
+        st->Gamepad.sThumbRX = (short)(rx * 32767);
+    if (ry)
+        st->Gamepad.sThumbRY = (short)(ry * 32767);
+    static DWORD last_keys, packets;
+    DWORD keys = (DWORD)(st->Gamepad.wButtons & ~before) << 8 | key('Q') << 1 | key('W') | (DWORD)(rx + 1) << 24 | (DWORD)(ry + 1) << 28;
+    if (keys != last_keys)
+        packets++, last_keys = keys;
+    st->dwPacketNumber += packets;  /* changes with every new key state, as the game expects of a new packet */
+}
+
 DWORD __stdcall XAPILIB__XInputGetState(void *handle, XBOX_STATE *out)
 {
     WIN_STATE st;
     DWORD port = (DWORD)handle - 1;
-    if (!xinput_ready() || port > 3 || win_get_state(port, &st) != ERROR_SUCCESS)
+    if (port > 3)
         return ERROR_DEVICE_NOT_CONNECTED;
+    if (!xinput_ready() || win_get_state(port, &st) != ERROR_SUCCESS) {
+        if (port != 0)
+            return ERROR_DEVICE_NOT_CONNECTED;
+        memset(&st, 0, sizeof st);  /* player 1 without a controller: the keyboard alone */
+    }
+    if (port == 0)
+        keyboard_pad(&st);
     WORD b = st.Gamepad.wButtons;
     out->dwPacketNumber = st.dwPacketNumber;
     out->Gamepad.wButtons = b & 0x00FF;  /* d-pad, start, back, thumb clicks: same bits on both */

@@ -413,6 +413,9 @@ __declspec(dllexport) void native_main(void)
     setup_fs(xbe);
     void native_kernel_start(void);
     native_kernel_start();
+    /* the game asks for gamepads with the Xbox's own device-type descriptor (XDEVICE_TYPE_GAMEPAD), not the port's */
+    extern void *port_gamepad_type;
+    port_gamepad_type = (void *)0x28ab14;
     /* what the Xbox startup thread (0x126fac) runs before main: process setup (heaps), the runtime's _rtinit and
      * _cinit (which runs the startup tables, C initializers first) */
     for (unsigned k = 0; k < sizeof startup / sizeof startup[0]; k++) {

@@ -28,6 +28,7 @@ The Xbox's CPU is a Pentium III, so the game's own machine code runs on a PC as 
 - **The kernel** (`port/kernel.c`): the 158 kernel imports point at `xboxkrnl_<name>` functions where they exist (critical sections kept in a table by address, because some are initialised statically in the Xbox layout; memory, pool, strings, time, timers and DPCs as no-ops, the kernel's data exports) and at a reporting stub otherwise.
 - **The thread block:** Xbox code reads `fs:[4]` (the TLS array), `fs:[0x20]`, `fs:[0x24]`, `fs:[0x28]` and `fs:[0x58]`, which mean other things in a Windows TEB, so the 83 such reads in the code sections are rewritten to read Windows TLS slots holding per-thread equivalents (set up in `DllMain` for every thread). `fs:[0]`, the exception chain, is the same on both.
 - **Startup:** what the Xbox startup thread runs: `XapiInitProcess`, `_rtinit`, `_cinit` (the runtime's own order: C initializers before C++ ones), then `main`.
+- **Input:** the keyboard and Windows controllers, through the port's XAPI (see "Gamepads" below); checked by sending Enter, Z and Up to the running game, which read them as Start, A and d-pad up.
 - The texture decoder (`port/gpu.c`) now checks that a texture's data is readable for the size its header gives; a 64x64 surface whose header claims a 16 KB pitch is skipped.
 
 ## Layout
@@ -581,6 +582,8 @@ All of them are `__stdcall`, except `XPhysicalFree`, which the game's prototype 
 - **Gamepads:** Windows XInput (`xinput1_4.dll`, falling back to `xinput9_1_0.dll`), loaded at run time.
   - Button mapping: the Xbox analog face buttons A/B/X/Y become 0 or 255; Black comes from the right shoulder, White from the left; triggers and sticks map directly; the d-pad, Start, Back and stick-click bits are identical.
   - `XGetDevices`/`XGetDeviceChanges` report connected pads. No memory units are reported, so saves go to `u:\`.
+  - Pad 1 is always connected, with the keyboard merged into the first controller (read only while the game's window has the focus): arrows = d-pad and left stick, Z/X/C/V = A/B/X/Y, Enter = Start, Esc or Backspace = Back, Q/W = left/right trigger, E/R = White/Black, I/J/K/L = right stick.
+  - The device type is compared by address: the port's own descriptor in the recompiled build, the Xbox's (`0x28ab14`) in the native one.
   - Rumble: the game writes the motor speeds at `+0x42`/`+0x44` of `XINPUT_FEEDBACK` (checked at its call site).
 - **Settings:** English, NTSC, 4:3. `XLaunchNewImageA` (back to the dashboard) quits.
 
