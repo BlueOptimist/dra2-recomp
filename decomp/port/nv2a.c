@@ -120,7 +120,9 @@ void nv_vsh_run(int start, NvVec4 in[16], NvVec4 out[NV_OUTPUTS])
             case MAC_MAX: for (int i = 0; i < 4; i++) m.v[i] = a.v[i] > b.v[i] ? a.v[i] : b.v[i]; break;
             case MAC_SLT: for (int i = 0; i < 4; i++) m.v[i] = a.v[i] < b.v[i] ? 1.0f : 0.0f; break;
             case MAC_SGE: for (int i = 0; i < 4; i++) m.v[i] = a.v[i] >= b.v[i] ? 1.0f : 0.0f; break;
-            case MAC_ARL: s.a0 = (int)floorf(a.v[0]); break;
+            /* biased like the hardware (and xemu): the skinning programs index bones with byte / 255 * 765, which
+             * comes out as 2.9999998 for index 1 and would floor to the previous bone's rows */
+            case MAC_ARL: s.a0 = (int)floorf(a.v[0] + 0.001f); break;
             }
         }
         if (ilu != ILU_NOP) {
