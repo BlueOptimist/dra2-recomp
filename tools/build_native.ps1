@@ -1,5 +1,6 @@
 # Build decomp/build/dra2_native.exe and dra2_native.dll: the game's original code, loaded from default.xbe at run
-# time, with the port's Xbox library replacements (port/native.c, port/native_launcher.c). Uses the port objects tools\build_all.ps1 compiled (build/obj/port_*.obj).
+# time, with the port's Xbox library replacements (port/native.c, port/native_launcher.c), compiled here with
+# optimisation (build/native/port_*.obj).
 # Usage: powershell -File tools\build_native.ps1
 $root = Split-Path -Parent $PSScriptRoot
 $mingw = 'C:\Users\Veo\Tools\llvm-mingw-20261006-ucrt-x86_64\bin'
@@ -20,9 +21,17 @@ if ($LASTEXITCODE) { exit 1 }
 
 # the port's platform layer; not game_fixes (decompiler repairs), startup (the recompiled entry point), xbox_stubs
 # (stand-ins for library functions the original code now provides itself), crt_math and cxx_runtime (the game's own C
-# runtime runs natively)
-$ports = 'calls', 'crash', 'd3d8', 'dsound', 'gpu', 'nv2a', 'platform', 'pushbuffer', 'xapi' |
-    ForEach-Object { Join-Path $build "obj\port_$_.obj" }
+# runtime runs natively). Compiled here with optimisation: tools\build_all.ps1 builds its copies at -O0, and at -O0
+# the vertex program interpreter alone held fights to 20-30 fps. Frame pointers stay for the crash reporter's chains.
+$flags = '--target=i686-w64-mingw32', '-std=gnu11', '-fms-extensions', '-w', '-Dsize_t=ghidra_size_t', '-c', '-O2',
+    '-fno-omit-frame-pointer', '-fno-builtin', '-Wno-error=int-conversion', '-Wno-error=incompatible-pointer-types',
+    '-Wno-error=implicit-function-declaration', "-I$build", "-I$(Join-Path $root 'decomp')"
+$ports = foreach ($name in 'calls', 'crash', 'd3d8', 'dsound', 'gpu', 'nv2a', 'platform', 'pushbuffer', 'xapi') {
+    $obj = Join-Path $out "port_$name.obj"
+    & $cc @flags (Join-Path $root "decomp\port\$name.c") -o $obj
+    if ($LASTEXITCODE) { "port/$name.c failed to compile"; exit 1 }
+    $obj
+}
 # the loader and the port, as a DLL above the Xbox range
 $dll = Join-Path $build 'dra2_native.dll'
 & $cc -shared -o $dll (Join-Path $out 'native.obj') (Join-Path $out 'native_tables.obj') (Join-Path $out 'kernel.obj') @ports `

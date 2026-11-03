@@ -682,9 +682,20 @@ static IDirect3DPixelShader9 *translate(const PixelShaderDef *ps)
         printf("[gpu] combiner program, %u stages -> ps_2_b: %08lx\n", stages, (unsigned long)hr);
     return shader;
 }
-/* translated programs, by the definition's contents */
-static struct { PixelShaderDef def; IDirect3DPixelShader9 *shader; } shaders[256];
+/* translated programs, by the definition's contents without its constant colours: the HLSL reads those from c[],
+ * and a program whose colours fade (or flash) would otherwise be compiled again every frame (half the time of a
+ * fight went to D3DCompile) */
+static struct { PixelShaderDef def; IDirect3DPixelShader9 *shader; } shaders[1024];
 static int shader_count;
+
+static PixelShaderDef shader_key(const PixelShaderDef *ps)
+{
+    PixelShaderDef k = *ps;
+    memset(k.constant0, 0, sizeof k.constant0);
+    memset(k.constant1, 0, sizeof k.constant1);
+    k.final_constant0 = k.final_constant1 = 0;
+    return k;
+}
 
 static void set_constant_color(int reg, DWORD argb)
 {
@@ -699,15 +710,20 @@ static int pixel_shader(void)
     if (!ps)
         return 0;
     IDirect3DPixelShader9 *shader = 0;
-    for (int i = 0; i < shader_count; i++)
-        if (!memcmp(&shaders[i].def, ps, sizeof *ps)) {
+    PixelShaderDef key = shader_key(ps);
+    static int last = -1;  /* consecutive draws mostly share one */
+    if (last >= 0 && !memcmp(&shaders[last].def, &key, sizeof key))
+        shader = shaders[last].shader;
+    for (int i = 0; i < shader_count && !shader; i++)
+        if (!memcmp(&shaders[i].def, &key, sizeof key)) {
             shader = shaders[i].shader;
-            break;
+            last = i;
         }
     if (!shader) {
         shader = translate(ps);
         if (shader_count < (int)(sizeof shaders / sizeof *shaders)) {
-            shaders[shader_count].def = *ps;
+            shaders[shader_count].def = key;
+            last = shader_count;
             shaders[shader_count++].shader = shader;
         }
     }

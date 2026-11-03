@@ -10,6 +10,7 @@ typedef struct { float v[4]; } NvVec4;
 #define NV_PROGRAM_SLOTS 136
 extern float nv_constants[NV_CONSTANTS][4];
 extern unsigned nv_program[NV_PROGRAM_SLOTS][4];
+extern unsigned nv_program_writes;  /* bumped with every write to nv_program (nv2a.c decodes again) */
 extern int nv_program_start;
 
 /* vertex program outputs (the NV2A's output register numbers) */

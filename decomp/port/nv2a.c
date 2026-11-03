@@ -23,6 +23,7 @@ float fabsf(float x);
 
 float nv_constants[NV_CONSTANTS][4];  /* index = register + 96 */
 unsigned nv_program[NV_PROGRAM_SLOTS][4];
+unsigned nv_program_writes;
 int nv_program_start;
 
 /* --------------------------------------------------------------------------------------- vertex programs -- */
@@ -95,7 +96,176 @@ static NvVec4 splat(float f)
     return v;
 }
 
+/* The interpreter proper runs a decoded copy of the program: the fields of each instruction are pulled out once per
+ * program, not once per vertex, and only the operands an operation reads are fetched (decoding everything for every
+ * vertex was most of a fight's frame time). nv_vsh_run_reference below is the straightforward version. */
+typedef struct {
+    unsigned char kind, neg, a0, sw[4];  /* kind: 0 constant, 1 temporary, 2 input */
+    int index;
+} DecodedOperand;
+
+typedef struct {
+    unsigned char mac, ilu, final, reads;  /* reads: bit 0 A, 1 B, 2 C */
+    unsigned char mac_mask, ilu_mask, o_mask, r, ilu_r, orb, mux;
+    unsigned addr;
+    DecodedOperand op[3];
+} Decoded;
+
+static Decoded decoded[NV_PROGRAM_SLOTS];
+static int decoded_start = -1, decoded_count;
+static unsigned decoded_writes;
+
+static void decode_operand(const unsigned *t, int which, DecodedOperand *o)
+{
+    unsigned neg, swz, reg, mux;
+    if (which == 0) {
+        neg = FLD(t, 1, 8, 1), swz = FLD(t, 1, 0, 8), reg = FLD(t, 2, 28, 4), mux = FLD(t, 2, 26, 2);
+    } else if (which == 1) {
+        neg = FLD(t, 2, 25, 1), swz = FLD(t, 2, 17, 8), reg = FLD(t, 2, 13, 4), mux = FLD(t, 2, 11, 2);
+    } else {
+        neg = FLD(t, 2, 10, 1), swz = FLD(t, 2, 2, 8), reg = (FLD(t, 2, 0, 2) << 2) | FLD(t, 3, 30, 2);
+        mux = FLD(t, 3, 28, 2);
+    }
+    o->neg = (unsigned char)neg, o->a0 = 0;
+    o->sw[0] = (swz >> 6) & 3, o->sw[1] = (swz >> 4) & 3, o->sw[2] = (swz >> 2) & 3, o->sw[3] = swz & 3;
+    if (mux == 1)
+        o->kind = 1, o->index = reg == 12 ? 12 : reg < 12 ? (int)reg : 0;
+    else if (mux == 2)
+        o->kind = 2, o->index = (int)V_INDEX(t);
+    else
+        o->kind = 0, o->index = (int)CONST_INDEX(t), o->a0 = (unsigned char)A0X(t);
+}
+
+/* decode from start to the final instruction, unless that is already decoded and nv_program unwritten since */
+static void decode_program(int start)
+{
+    if (start == decoded_start && nv_program_writes == decoded_writes)
+        return;
+    decoded_start = start, decoded_writes = nv_program_writes, decoded_count = 0;
+    for (int pc = start; pc < NV_PROGRAM_SLOTS; pc++) {
+        const unsigned *t = nv_program[pc];
+        Decoded *d = &decoded[pc];
+        decoded_count++;
+        d->mac = (unsigned char)MAC(t), d->ilu = (unsigned char)ILU(t), d->final = (unsigned char)FINAL(t);
+        static const unsigned char mac_reads[16] = { 0, 1, 3, 5, 7, 3, 3, 3, 3, 3, 3, 3, 3, 1, 0, 0 };
+        d->reads = (unsigned char)(mac_reads[d->mac] | (d->ilu != ILU_NOP ? 4 : 0));
+        for (int k = 0; k < 3; k++)
+            if (d->reads & (1 << k))
+                decode_operand(t, k, &d->op[k]);
+        d->r = (unsigned char)OUT_R(t);
+        d->mac_mask = d->mac != MAC_NOP && d->mac != MAC_ARL ? (unsigned char)OUT_MAC_MASK(t) : 0;
+        d->ilu_mask = d->ilu != ILU_NOP ? (unsigned char)OUT_ILU_MASK(t) : 0;
+        d->ilu_r = d->mac != MAC_NOP ? 1 : d->r;  /* with both units writing, the ILU result goes to r1 */
+        d->o_mask = (unsigned char)OUT_O_MASK(t), d->orb = (unsigned char)OUT_ORB(t), d->mux = (unsigned char)OUT_MUX(t);
+        d->addr = OUT_ADDRESS(t);
+        if (d->final)
+            break;
+    }
+}
+
+static inline void fetch_operand(const DecodedOperand *o, const VshState *s, float *v)
+{
+    const float *src;
+    if (o->kind == 1)
+        src = o->index == 12 ? s->out[NV_OUT_POS].v : s->r[o->index].v;
+    else if (o->kind == 2)
+        src = s->in[o->index].v;
+    else {
+        int c = o->index + (o->a0 ? s->a0 : 0);
+        src = nv_constants[c < 0 ? 0 : c >= NV_CONSTANTS ? NV_CONSTANTS - 1 : c];
+    }
+    v[0] = src[o->sw[0]], v[1] = src[o->sw[1]], v[2] = src[o->sw[2]], v[3] = src[o->sw[3]];
+    if (o->neg)
+        v[0] = -v[0], v[1] = -v[1], v[2] = -v[2], v[3] = -v[3];
+}
+
+static inline void store_masked(float *dst, const float *v, unsigned mask)
+{
+    if (mask & 8) dst[0] = v[0];
+    if (mask & 4) dst[1] = v[1];
+    if (mask & 2) dst[2] = v[2];
+    if (mask & 1) dst[3] = v[3];
+}
+
+static inline float *temp_register(VshState *s, unsigned r)
+{
+    return r == 12 ? s->out[NV_OUT_POS].v : s->r[r < 12 ? r : 0].v;
+}
+
 void nv_vsh_run(int start, NvVec4 in[16], NvVec4 out[NV_OUTPUTS])
+{
+    decode_program(start);
+    VshState s;
+    __builtin_memset(s.r, 0, sizeof s.r);
+    s.in = in, s.out = out, s.a0 = 0;
+    for (int pc = start; pc < start + decoded_count; pc++) {
+        const Decoded *d = &decoded[pc];
+        float a[4], b[4], c[4], m[4] = { 0, 0, 0, 0 }, l[4] = { 0, 0, 0, 0 };
+        if (d->reads & 1) fetch_operand(&d->op[0], &s, a);
+        if (d->reads & 2) fetch_operand(&d->op[1], &s, b);
+        if (d->reads & 4) fetch_operand(&d->op[2], &s, c);
+        switch (d->mac) {
+        case MAC_NOP: break;
+        case MAC_MOV: m[0] = a[0], m[1] = a[1], m[2] = a[2], m[3] = a[3]; break;
+        case MAC_MUL: for (int i = 0; i < 4; i++) m[i] = a[i] * b[i]; break;
+        case MAC_ADD: for (int i = 0; i < 4; i++) m[i] = a[i] + c[i]; break;
+        case MAC_MAD: for (int i = 0; i < 4; i++) m[i] = a[i] * b[i] + c[i]; break;
+        case MAC_DP3: m[0] = m[1] = m[2] = m[3] = a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; break;
+        case MAC_DPH: m[0] = m[1] = m[2] = m[3] = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + b[3]; break;
+        case MAC_DP4: m[0] = m[1] = m[2] = m[3] = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]; break;
+        case MAC_DST: m[0] = 1.0f, m[1] = a[1] * b[1], m[2] = a[2], m[3] = b[3]; break;
+        case MAC_MIN: for (int i = 0; i < 4; i++) m[i] = a[i] < b[i] ? a[i] : b[i]; break;
+        case MAC_MAX: for (int i = 0; i < 4; i++) m[i] = a[i] > b[i] ? a[i] : b[i]; break;
+        case MAC_SLT: for (int i = 0; i < 4; i++) m[i] = a[i] < b[i] ? 1.0f : 0.0f; break;
+        case MAC_SGE: for (int i = 0; i < 4; i++) m[i] = a[i] >= b[i] ? 1.0f : 0.0f; break;
+        case MAC_ARL: s.a0 = (int)floorf(a[0] + 0.001f); break;  /* the bias: see nv_vsh_run_reference */
+        }
+        if (d->ilu != ILU_NOP) {
+            float x = c[0];
+            switch (d->ilu) {
+            case ILU_MOV: l[0] = c[0], l[1] = c[1], l[2] = c[2], l[3] = c[3]; break;
+            case ILU_RCP: l[0] = l[1] = l[2] = l[3] = x == 0.0f ? 3.4e38f : 1.0f / x; break;
+            case ILU_RCC: {
+                float r = x == 0.0f ? 1.884467e19f : 1.0f / x;
+                float ar = fabsf(r);
+                if (ar < 5.42101e-20f) r = r < 0 ? -5.42101e-20f : 5.42101e-20f;
+                else if (ar > 1.884467e19f) r = r < 0 ? -1.884467e19f : 1.884467e19f;
+                l[0] = l[1] = l[2] = l[3] = r;
+                break;
+            }
+            case ILU_RSQ: l[0] = l[1] = l[2] = l[3] = x == 0.0f ? 3.4e38f : 1.0f / sqrtf(fabsf(x)); break;
+            case ILU_EXP: l[0] = exp2f(floorf(x)), l[1] = x - floorf(x), l[2] = exp2f(x), l[3] = 1.0f; break;
+            case ILU_LOG: {
+                float ax = fabsf(x), e = ax == 0.0f ? -3.4e38f : floorf(log2f(ax));
+                l[0] = e, l[1] = ax == 0.0f ? 1.0f : ax / exp2f(e), l[2] = ax == 0.0f ? -3.4e38f : log2f(ax);
+                l[3] = 1.0f;
+                break;
+            }
+            case ILU_LIT: {
+                float dx = c[0] > 0 ? c[0] : 0, dy = c[1] > 0 ? c[1] : 0, p = c[3];
+                if (p < -127.9961f) p = -127.9961f;
+                if (p > 127.9961f) p = 127.9961f;
+                l[0] = 1.0f, l[1] = dx, l[2] = dx > 0 ? powf(dy, p) : 0.0f, l[3] = 1.0f;
+                break;
+            }
+            }
+        }
+        if (d->mac_mask)
+            store_masked(temp_register(&s, d->r), m, d->mac_mask);
+        if (d->ilu_mask)
+            store_masked(temp_register(&s, d->ilu_r), l, d->ilu_mask);
+        if (d->o_mask) {
+            const float *v = d->mux ? l : m;
+            if (d->orb)
+                store_masked(out[d->addr & 0xF].v, v, d->o_mask);
+            else if (d->addr < NV_CONSTANTS)
+                store_masked(nv_constants[d->addr], v, d->o_mask);
+        }
+    }
+}
+
+/* the straightforward interpreter, decoding as it goes (kept as the reference for the one above) */
+void nv_vsh_run_reference(int start, NvVec4 in[16], NvVec4 out[NV_OUTPUTS])
 {
     VshState s;
     for (int i = 0; i < 13; i++)

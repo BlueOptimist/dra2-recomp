@@ -247,6 +247,7 @@ static void load_program(const DWORD *program, unsigned instructions, unsigned a
 {
     for (unsigned i = 0; i < instructions && address + i < NV_PROGRAM_SLOTS; i++)
         memcpy(nv_program[address + i], program + 4 * i, 16);
+    nv_program_writes++;
 }
 
 /* LoadVertexShaderProgram(program, address): [type, count] header, then the instructions */

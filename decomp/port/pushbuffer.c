@@ -180,10 +180,20 @@ void nv_draw_indexed(unsigned prim, const unsigned *list, unsigned count)
 {
     if (count > 0x10000)
         count = 0x10000;
+    /* each index's vertex once per draw: a strip or list names most vertices more than once */
+    static unsigned tag[0x10000], slot[0x10000], generation;
+    if (!++generation)
+        __builtin_memset(tag, 0, sizeof tag), generation = 1;
     NvVec4 in[16];
     for (unsigned i = 0; i < count; i++) {
+        unsigned h = list[i] & 0xffff;
+        if (tag[h] == generation && list[slot[h]] == list[i]) {
+            vertices[i] = vertices[slot[h]];
+            continue;
+        }
         vertex_inputs(list[i], in);
         make_vertex(in, &vertices[i]);
+        tag[h] = generation, slot[h] = i;
     }
     log_draw("indexed", prim, count);
     gpu_draw((int)prim, vertices, count);
@@ -253,6 +263,7 @@ void nv_method(unsigned method, unsigned value)
     if (method >= NV_TRANSFORM_PROGRAM && method < NV_TRANSFORM_PROGRAM + 0x80) {
         unsigned word = (method - NV_TRANSFORM_PROGRAM) / 4;
         nv_program[program_load % NV_PROGRAM_SLOTS][word & 3] = value;
+        nv_program_writes++;
         if ((word & 3) == 3)
             program_load++;
         return;
