@@ -143,8 +143,12 @@ def main():
             os.makedirs(obj_dir, exist_ok=True)
             jobs_list.append((clang, src, obj, [build, decomp], *instrument))
     print(f"functions stubbed (still have compile errors): {stubbed}")
-    # hand-written port code (runtime stand-ins, later the platform layer)
+    # hand-written port code (runtime stand-ins, later the platform layer); not the native build's own files
+    # (tools/build_native.ps1: the loader, its launcher and the Xbox kernel exports)
+    native_only = {"native.c", "native_launcher.c", "kernel.c"}
     for src in sorted(glob.glob(os.path.join(decomp, "port", "*.c"))):
+        if os.path.basename(src) in native_only:
+            continue
         jobs_list.append((clang, src, os.path.join(obj_dir, "port_" + os.path.basename(src)[:-2] + ".obj"),
                           [build, decomp]))
 

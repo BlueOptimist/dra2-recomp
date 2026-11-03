@@ -126,6 +126,9 @@ void *__stdcall XAPILIB__CreateThread(void *security, DWORD stack, LPTHREAD_STAR
 {
     void *h = CreateThread(security, stack, start, param, flags, id);
     printf("[xapi] CreateThread(%p, %p) -> %p\n", (void *)start, param, h);
+    if (!h)
+        printf("[xapi]   failed: error %lu (security %p, stack %#lx, flags %#lx)\n", GetLastError(), security,
+               (unsigned long)stack, (unsigned long)flags);
     return h;
 }
 
@@ -172,6 +175,24 @@ typedef struct { unsigned char *p; DWORD size; void *site[3]; void *freed_at[2];
 #define FREED_BYTE 0xDD
 static Tracked tracked[TRACKED];
 static int heapcheck = -1, heap_ops, guard_reported;
+/* with DRA2_HEAPCHECK=1, the whole heap is checked at each allocation and free: the first failure names the
+ * heap call just before it, the last one that found the heap intact */
+WINIMPORT BOOL WINAPI HeapValidate(HANDLE heap, DWORD flags, const void *mem);
+static void *last_heap_op;
+static const char *last_heap_kind;
+static void heap_validate(void *heap, const char *kind, void *caller)
+{
+    static int reported;
+    if (!reported && !HeapValidate(heap, 0, 0)) {
+        reported = 1;
+        printf("[heap] heap %p damaged before this %s (from %p); the last call that found it intact: %s from %p\n"
+               "[crash] frame %08lx\n[crash] frame %08lx\n", heap, kind, caller, last_heap_kind, last_heap_op,
+               (unsigned long)caller, (unsigned long)last_heap_op);
+    }
+    last_heap_op = caller;
+    last_heap_kind = kind;
+}
+WINIMPORT BOOL WINAPI IsBadReadPtr(const void *p, SIZE_T size);
 
 static int heapcheck_on(void)
 {
@@ -301,6 +322,7 @@ void *__stdcall FUN_0012ae24(void *heap, DWORD flags, DWORD size)
             watchalloc_check(p, size);
         return p;
     }
+    heap_validate(heap, "allocation", __builtin_return_address(0));
     unsigned char *p = HeapAlloc(heap, flags, size + GUARD);
     if (p) {
         for (int i = 0; i < GUARD; i++)
@@ -309,10 +331,19 @@ void *__stdcall FUN_0012ae24(void *heap, DWORD flags, DWORD size)
         if (t) {
             t->p = p;
             t->size = size;
-            /* the allocating game code, up through LocalAlloc / malloc / operator new (frames exist at -O0) */
-            t->site[0] = __builtin_return_address(1);
-            t->site[1] = __builtin_return_address(2);
-            t->site[2] = __builtin_return_address(3);
+            /* the allocating game code, up through LocalAlloc / malloc / operator new: the frame chain, followed
+             * only while it is readable (the original Xbox code, run natively, doesn't always keep frame pointers) */
+            void **frame = __builtin_frame_address(0);
+            t->site[0] = __builtin_return_address(0);
+            t->site[1] = t->site[2] = 0;
+            for (int k = 0; k < 3 && frame && !IsBadReadPtr(frame, 8); k++) {
+                if (k)
+                    t->site[k] = frame[1];
+                void **next = frame[0];
+                if (next <= frame)
+                    break;
+                frame = next;
+            }
         }
     }
     if (++heap_ops % 256 == 0)
@@ -333,6 +364,7 @@ unsigned char __stdcall XAPILIB__HeapFree(void *heap, DWORD flags, void *mem)
         return 0;
     }
     if (mem && heapcheck_on()) {
+        heap_validate(heap, "free", __builtin_return_address(0));
         Tracked *t = slot_of(mem, 0);
         if (t && t->freed_at[0]) {
             static int twice;
@@ -346,8 +378,8 @@ unsigned char __stdcall XAPILIB__HeapFree(void *heap, DWORD flags, void *mem)
             /* kept in quarantine, filled, so a later write to it is caught (never returned to Windows) */
             for (DWORD i = 0; i < t->size; i++)
                 t->p[i] = FREED_BYTE;
-            t->freed_at[0] = __builtin_return_address(1);
-            t->freed_at[1] = __builtin_return_address(2);
+            t->freed_at[0] = __builtin_return_address(0);  /* the caller only: deeper frames may not exist */
+            t->freed_at[1] = 0;
         }
         if (++heap_ops % 256 == 0)
             check_all();
@@ -827,6 +859,9 @@ DWORD __stdcall XAPILIB__XGetVideoFlags(void) { return 0; }     /* 4:3, no HDTV 
 /* used to return to the dashboard or reboot the title: on PC that's quitting */
 void __stdcall XAPILIB__XLaunchNewImageA(const char *image, void *launch_data)
 {
-    (void)image, (void)launch_data;
+    void port_print_chain(const char *tag);
+    (void)launch_data;
+    printf("[xapi] XLaunchNewImage(%s): the game asked to leave (dashboard or another image)\n", image ? image : "(dashboard)");
+    port_print_chain("fatal");
     ExitProcess(0);
 }

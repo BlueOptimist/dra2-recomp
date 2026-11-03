@@ -38,6 +38,9 @@
 !/decomp/port/calls.c
 !/decomp/port/game_fixes.c
 !/decomp/port/win32_min.h
+!/decomp/port/native.c
+!/decomp/port/native_launcher.c
+!/decomp/port/kernel.c
 
 !/analysis/
 /analysis/*

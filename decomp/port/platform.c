@@ -13,7 +13,9 @@ int ghidra_dynamic_one = 1;
  * replaces those, so reaching this means a library path the port still runs by mistake. */
 void port_kernel_unimplemented(const char *name)
 {
+    void port_print_chain(const char *tag);
     printf("[port] Xbox kernel import called: %s (no Windows implementation)\n", name);
+    port_print_chain("fatal");
     abort();
 }
 

@@ -19,6 +19,17 @@ The **6,773 functions in `src/`** (about 1.15 MB of machine code) are what actua
 
 `functions.tsv` tracks every function: address, name, size, module, file, where the name came from, and status (`raw` for game code, `library` for lib code).
 
+## Native build: the original code, on Windows
+
+The Xbox's CPU is a Pentium III, so the game's own machine code runs on a PC as it is. `tools/build_native.ps1` builds `build/dra2_native.exe` and `build/dra2_native.dll`, which load `default.xbe` at its Xbox addresses and run it with the port's platform layer; nothing decompiled is involved, so none of the decompiler's mistakes are either. It runs the boot screens, the title and the attract mode's demo fight ("Timed Rumble", four AI fighters and the HUD) without a crash for five minutes; run it with `powershell -File tools\run_game.ps1 -Exe decomp\build\dra2_native.exe`.
+
+- **The address range** (`port/native_launcher.c`): Windows fills the low addresses with stacks, heaps and mapped files before `main` runs, so the launcher .exe is linked at 0x10000 with a placeholder section past the end of the game's image (0x331aa0); the loader DLL copies the XBE over it. Its first page keeps "MZ" and points `e_lfanew` past the XBE header (which ends at 0xa20) to a copy of the launcher's PE headers: Windows reads them when it starts a thread (`ERROR_BAD_EXE_FORMAT` otherwise).
+- **The libraries** (`tools/gen_native.py`): each Direct3D, DirectSound, XGraphics and XAPI function the port implements gets a `jmp` to it at its Xbox entry (115, matched by name; the port's conventions were checked against each original's `ret`, and two got wrappers). XAPI internals the port never needed are replaced in `port/native.c`: the DVD authentication, drive mounting and launch-drive lookups `XapiInitProcess` runs, and the heap (`RtlCreateHeap`, allocate, free, size, reallocate) on Windows heaps, with 16-byte aligned blocks because the game's SSE code (`movaps`) relies on the Xbox heap's alignment.
+- **The kernel** (`port/kernel.c`): the 158 kernel imports point at `xboxkrnl_<name>` functions where they exist (critical sections kept in a table by address, because some are initialised statically in the Xbox layout; memory, pool, strings, time, timers and DPCs as no-ops, the kernel's data exports) and at a reporting stub otherwise.
+- **The thread block:** Xbox code reads `fs:[4]` (the TLS array), `fs:[0x20]`, `fs:[0x24]`, `fs:[0x28]` and `fs:[0x58]`, which mean other things in a Windows TEB, so the 83 such reads in the code sections are rewritten to read Windows TLS slots holding per-thread equivalents (set up in `DllMain` for every thread). `fs:[0]`, the exception chain, is the same on both.
+- **Startup:** what the Xbox startup thread runs: `XapiInitProcess`, `_rtinit`, `_cinit` (the runtime's own order: C initializers before C++ ones), then `main`.
+- The texture decoder (`port/gpu.c`) now checks that a texture's data is readable for the size its header gives; a 64x64 surface whose header claims a 16 KB pitch is skipped.
+
 ## Layout
 
 ```

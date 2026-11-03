@@ -243,6 +243,32 @@ static CachedTexture *texture_for(const XTexture *x)
     return c;
 }
 
+/* How many bytes from p on are committed and readable. A texture whose header asks for more than its data block
+ * holds (or whose block is already freed) is logged and skipped instead of read past the end. */
+static unsigned readable_from(const void *p)
+{
+    MEMORY_BASIC_INFORMATION m;
+    unsigned total = 0;
+    for (const unsigned char *q = p; total < 0x4000000u; q = (const unsigned char *)m.BaseAddress + m.RegionSize) {
+        if (!VirtualQuery(q, &m, sizeof m) || m.State != MEM_COMMIT || (m.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
+            break;
+        total += (unsigned)((const unsigned char *)m.BaseAddress + m.RegionSize - q);
+    }
+    return total;
+}
+
+static int texture_fits(const XTexture *x, unsigned bytes)
+{
+    unsigned have = readable_from(x->Data);
+    if (have >= bytes)
+        return 1;
+    static int warned;
+    if (warned++ < 8)
+        printf("[gpu] texture %p (format %08lx, size %08lx) needs %u bytes at %p, only %u readable: skipped\n",
+               (void *)x, (unsigned long)x->Format, (unsigned long)x->Size, bytes, x->Data, have);
+    return 0;
+}
+
 static void decode(CachedTexture *c, const XTexture *x)
 {
     unsigned format = (x->Format >> 8) & 0xff;
@@ -258,6 +284,8 @@ static void decode(CachedTexture *c, const XTexture *x)
     if (format == 0x0c || format == 0x0e || format == 0x0f) {  /* DXT1/3/5: the same block layout as on Windows */
         D3DFORMAT f = format == 0x0c ? D3DFMT_DXT1 : format == 0x0e ? D3DFMT_DXT3 : D3DFMT_DXT5;
         unsigned block = format == 0x0c ? 8 : 16, bw = (w + 3) / 4, bh = (h + 3) / 4;
+        if (!texture_fits(x, bw * bh * block))
+            return;
         if (FAILED(IDirect3DDevice9_CreateTexture(device, w, h, 1, 0, f, D3DPOOL_MANAGED, &c->texture, 0)))
             return;
         D3DLOCKED_RECT lr;
@@ -277,6 +305,8 @@ static void decode(CachedTexture *c, const XTexture *x)
             printf("[gpu] texture format %#x not decoded yet (%ux%u)\n", format, w, h);
         return;
     }
+    if (!texture_fits(x, c->linear ? pitch * h : w * h * (unsigned)bpp))
+        return;
     if (FAILED(IDirect3DDevice9_CreateTexture(device, w, h, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &c->texture, 0)))
         return;
     c->bytes = c->linear ? pitch * h : w * h * (unsigned)bpp;
