@@ -1336,10 +1336,12 @@ def main():
             pointer_globals.add(next(g for g in m.groups() if g))
         for m in re.finditer(rf"\b{_G}\s*\[", text):
             indexed_globals.add(m.group(1))
-        # "piVar13 = G + 1": a label assigned to a pointer local is a pointer (the resource list's begin, never
+        # "piVar13 = G + 1": a label offset by a count into a pointer local is a pointer (the resource list's begin, never
         # dereferenced directly, was declared undefined4, so its "+ 1" stepped one byte); Ghidra's prefix gives the
-        # element size: pi/pu/pp/pf a dword, pc/pb a byte
-        for m in re.finditer(rf"\b(p[a-z])[A-Za-z]*Var\d+\s*=\s*{_G}\s*(?:;|[+-])", text):
+        # element size: pi/pu/pp/pf a dword, pc/pb a byte. Not a plain "puVar = G;": for an integer label Ghidra would
+        # print "(int *)(G + 4)", but a plain copy says nothing, and the attract's level list (DAT_002f475c, indexed
+        # "n * 0x104 + G") read past its names
+        for m in re.finditer(rf"\b(p[a-z])[A-Za-z]*Var\d+\s*=\s*{_G}\s*[+-]\s*(?:0x[0-9a-f]+|\d+)\s*;", text):
             pointer_globals.add(m.group(2))
             if m.group(1) in ("pi", "pu", "pp", "pf"):
                 indexed_globals.add(m.group(2))
