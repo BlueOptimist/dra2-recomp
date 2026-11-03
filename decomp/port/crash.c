@@ -29,6 +29,7 @@ typedef struct { EXCEPTION_RECORD_32 *record; void *context; } EXCEPTION_POINTER
 
 WINIMPORT void *WINAPI AddVectoredExceptionHandler(DWORD first, long(WINAPI *handler)(EXCEPTION_POINTERS_32 *));
 WINIMPORT BOOL WINAPI IsBadReadPtr(const void *p, SIZE_T size);
+WINIMPORT BOOL WINAPI SetThreadStackGuarantee(DWORD *size);
 
 /* the return addresses up the EBP frame chain, starting with eip; returns how many */
 static int walk_chain(DWORD eip, DWORD *ebp, DWORD *out, int max)
@@ -313,6 +314,10 @@ static DWORD WINAPI sampler(void *param)
 void port_install_crash_reporter(void)
 {
     AddVectoredExceptionHandler(1, on_exception);
+    /* stack kept back for the report after a stack overflow: without it the handler itself faults and the game
+     * vanishes with a bare 0xC0000005 exit code */
+    DWORD guarantee = 64 * 1024;
+    SetThreadStackGuarantee(&guarantee);
     parse_watch();  /* printed with each sample and in a crash report */
     static char ww[128];
     DWORD wn = GetEnvironmentVariableA("DRA2_WATCHWRITE", ww, sizeof ww);

@@ -166,7 +166,8 @@ def rewrite(path, clang, flags, fp_table=None):
         k = bisect.bisect_right(header_lines, line) - 1
         return headers[k][1] if k >= 0 else None
 
-    inserts, removals, seen = [], [], set()
+    decided = []
+    bit_reads = set()  # (function, variable) read as "(int)V" that is a bit copy
     for c in found:
         (l1, c1), (l2, c2) = c["range"]
         fn = function_at(l1)
@@ -178,7 +179,30 @@ def rewrite(path, clang, flags, fp_table=None):
             o = line_starts[c["operand_start"][0] - 1] + c["operand_start"][1] - 1
             if start <= o <= end:
                 operand = text[o:end]
-        if not is_bit_copy(c, converts, operand):
+        bits = is_bit_copy(c, converts, operand)
+        if bits and c["kind"] == "bits" and c["explicit"]:
+            bit_reads.add((fn, operand.strip()))
+        decided.append((c, fn, start, end, bits))
+    for m in re.finditer(r"\*\(uint \*\)&(\w+)", text):  # compile_check's float_cast spelling of the same bit read
+        bit_reads.add((function_at(text.count("\n", 0, m.start()) + 1), m.group(1)))
+
+    # A float variable the decompiler uses to hold an integer: "V = (float)(i + 1); ... (int)V". When the read is a bit
+    # copy (the function has no float -> int instruction), the store is one too: the machine moved the integer, and
+    # converting it made the digit counter's "(int)V" read 0x40400000 for 3 (FUN_00089b70, the attract fight's timer).
+    def store_target(start, end):
+        if not re.match(r"\s*;", text[end:end + 8]):
+            return None
+        line_start = text.rfind("\n", 0, start) + 1
+        m = re.search(r"([^;{}=!<>]+?)\s*=\s*$", text[line_start:start])
+        return m.group(1).strip() if m else None
+
+    inserts, removals, seen = [], [], set()
+    for c, fn, start, end, bits in decided:
+        if (not bits and c["kind"] == "float" and c["explicit"] and bit_reads
+                and (c["operand_alias"] in INT32_TYPES or c["operand_type"] in INT32_TYPES)
+                and (fn, store_target(start, end)) in bit_reads):
+            bits = True
+        if not bits:
             continue
         if (start, end) in seen or end <= start:
             continue

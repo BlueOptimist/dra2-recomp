@@ -188,6 +188,267 @@ void __thiscall Class_2a3c90__vf06(unsigned char *this, float pan)
     *(unsigned *)(this + 0x14) |= 0x10;
 }
 
+/* replaces 00173200 Class_2a64e8::vf01: after the base class's load (Class_2a3850::vf01), look up the 10 names
+ * listed in the loaded data (+0x18): each a self-relative offset at data+0x1c+4i to a string, empty for none. Each
+ * found object (FUN_00186ac0) is stored at +0x20+4i and attached to this one's +0x1c. The decompiled body read the
+ * offsets through the vtable type and didn't compile, so the stub trapped when the attract fight loaded its arena. */
+unsigned char __thiscall Class_2a3850__vf01(void *this, unsigned param_2);
+unsigned *FUN_00186ac0(int name);
+void __thiscall FUN_001868e0(void *this, int param_1);
+
+unsigned char __thiscall Class_2a64e8__vf01(unsigned char *this, unsigned param_2)
+{
+    if (!Class_2a3850__vf01(this, param_2))
+        return 0;
+    int *offset = (int *)(*(unsigned char **)(this + 0x18) + 0x1c);
+    void **found = (void **)(this + 0x20);
+    for (int i = 0; i < 10; i++, offset++, found++) {
+        char *name = (char *)offset + *offset;
+        if (*name) {
+            *found = FUN_00186ac0((int)name);
+            FUN_001868e0(*found, (int)(this + 0x1c));
+        }
+    }
+    return 1;
+}
+
+/* replaces 00172f20 Class_2a7270::vf05: a value that drifts to a random target. Its parameters (+0xc) are refreshed by
+ * FUN_0013c070(this, index, value): [0] enabled, [1]/[2] the target's range, [3] the time to reach it, [4] whether to
+ * interpolate, [5] the output. +0x24 counts time (the owner's clock at +4 -> +0xc, its +0x1c is the frame time); when
+ * it reaches [3], the old target (+0x1c) becomes the start (+0x20) and a new one is drawn. Then the owner (+4) is told
+ * its slot (+8) changed: bit set in the dirty mask at owner+0x38, owner+0x34 cleared, and +0x10 flagged. The decompiled
+ * body read the fields through the vtable type and didn't compile, so the stub trapped when the attract fight built
+ * its level. */
+unsigned __thiscall FUN_0013c070(void *this, int index, float value);
+
+void __thiscall Class_2a7270__vf05(unsigned char *this, unsigned param_2)
+{
+    (void)param_2;
+#define P(i) ((*(float **)(this + 0xc))[i])
+#define F(off) (*(float *)(this + (off)))
+    FUN_0013c070(this, 0, 0.0f);
+    if (P(0) == 0.0f)
+        return;
+    unsigned char *owner = *(unsigned char **)(this + 4);
+    F(0x24) += *(float *)(*(unsigned char **)(owner + 0xc) + 0x1c);
+    FUN_0013c070(this, 3, 0.0f);
+    float duration = P(3);
+    if (!(F(0x24) < duration)) {
+        F(0x20) = F(0x1c);
+        FUN_0013c070(this, 2, 0.0f);
+        float hi = P(2);
+        FUN_0013c070(this, 1, 0.0f);
+        F(0x1c) = FUN_001c8420(0, P(1), hi);
+        F(0x24) = 0.0f;
+    }
+    float out;
+    if (duration > 0.0f && (FUN_0013c070(this, 4, 0.0f), P(4) != 0.0f))
+        out = (F(0x1c) - F(0x20)) / duration * F(0x24) + F(0x20);
+    else
+        out = F(0x1c);
+    FUN_0013c070(this, 5, out);
+    P(5) = out;
+    *(unsigned *)(this + 0x10) |= 0x80000000u;
+    int slot = *(int *)(this + 8);
+    owner = *(unsigned char **)(this + 4);
+    (*(unsigned **)(owner + 0x38))[slot >> 5] |= 1u << (slot & 0x1f);
+    owner[0x34] = 0;
+#undef P
+#undef F
+}
+
+/* The end of GameMode::ctor (000a7530, called from its source patch): the arena's bounds (+0x494, min and max
+ * corners, reset to +/-FLT_MAX) grow to the "upperleft" and "lowerright" markers of the level (their world matrix
+ * from virtual slot 0x28, translation at +0x70), x widened to -666 and 666; without both markers, to (30, -500, 500)
+ * and (-30, 500, -500). The decompiled code kept the second marker in a stack slot it reused, and called it at -1. */
+void __thiscall FUN_001d2fc0(void *bounds, float *point);
+
+void GameMode_marker_bounds(void *bounds, void *upper_left, void *lower_right)
+{
+    if (!upper_left || !lower_right) {
+        float a[3] = { 30.0f, -500.0f, 500.0f }, b[3] = { -30.0f, 500.0f, -500.0f };
+        FUN_001d2fc0(bounds, a);
+        FUN_001d2fc0(bounds, b);
+        return;
+    }
+    void *marker[2] = { upper_left, lower_right };
+    for (int i = 0; i < 2; i++) {
+        unsigned char *(__thiscall *matrix)(void *) = (*(unsigned char *(__thiscall ***)(void *))marker[i])[0x28 / 4];
+        float *at = (float *)(matrix(marker[i]) + 0x70);
+        float point[3] = { i ? 666.0f : -666.0f, at[1], at[2] };
+        FUN_001d2fc0(bounds, point);
+    }
+}
+
+/* replaces 00050c60: binds a list of named slots to a scene (the camera controller's targets). +4 = source->vf28()
+ * (the scene), then for each of this->vf0c() entries: *this->vf00(i) = FUN_0013cc10(scene, this->vf08(i)), the slot
+ * filled with the scene node of that name. The decompiled loop dropped the index argument of vf00 and passed the
+ * previous name instead, so the attract fight's camera wrote its first node through a small integer.
+ * Its vf08 (FUN_00050f70) is a __thiscall that ignores "this", recompiled as cdecl: it leaves its argument on the
+ * stack, so like the decompiled code this keeps a variable-length local, which makes the epilogue restore ESP. */
+int __thiscall FUN_0013cc10(void *scene, unsigned char *name);
+extern int ghidra_dynamic_one;
+
+void __thiscall FUN_00050c60(void **this, void **source)
+{
+    char keep_esp[ghidra_dynamic_one];
+    (void)keep_esp;
+    if (!source) {
+        this[1] = 0;
+        return;
+    }
+    typedef void *(__thiscall *Method)(void *self, int i);
+    this[1] = ((void *(__thiscall *)(void *))(*(void ***)source)[0x28 / 4])(source);
+    void **vtable = *(void ***)this;
+    int count = ((int(__thiscall *)(void *))vtable[0xc / 4])(this);
+    for (int i = 0; i < count; i++) {
+        int *slot = ((Method)vtable[0])(this, i);
+        unsigned char *name = ((Method)vtable[2])(this, i);
+        *slot = FUN_0013cc10(this[1], name);
+    }
+}
+
+/* replaces 0007e520: a model's anchor point, from its interface at +0x128 (this - 0x128 is the model). vf09 (slot
+ * 0x24) gives a local point (filling a scratch vector), vf08 (slot 0x20) the matrix to place it with, and
+ * FUN_001cbbc0 transforms it; out = { point, 0, 0, 0 }. The original reuses the arguments it pushed for the first two
+ * calls (each takes one and pops one) as FUN_001cbbc0's, which the decompiler couldn't follow: it passed ESI. */
+void __thiscall FUN_001cbbc0(void *matrix, float *in, float *out);
+
+void __thiscall FUN_0007e520(unsigned char *this, float *out)
+{
+    void *model = this - 0x128;
+    void **vtable = *(void ***)model;
+    float point[3], scratch[4], matrix_scratch[4];
+    float *local = ((float *(__thiscall *)(void *, float *))vtable[0x24 / 4])(model, scratch);
+    void *matrix = ((void *(__thiscall *)(void *, float *))vtable[0x20 / 4])(model, matrix_scratch);
+    FUN_001cbbc0(matrix, local, point);
+    out[0] = point[0], out[1] = point[1], out[2] = point[2];
+    out[3] = out[4] = out[5] = 0.0f;
+}
+
+/* replaces 000f3490: a character model's anchor (FUN_0007e520 above) plus its definition's +0x784 at +0x18, this
+ * +0x12c at +0x1c, 1.0 at +0x20 and the byte at +0x4cc as a float at +0x24. The decompiled call passed EDI and ESI
+ * where the output went. */
+void __thiscall FUN_000f3490(unsigned char *this, unsigned char *out)
+{
+    FUN_0007e520(this, (float *)out);
+    *(unsigned *)(out + 0x18) = *(unsigned *)(*(unsigned char **)(this + 8) + 0x784);
+    *(unsigned *)(out + 0x1c) = *(unsigned *)(this + 0x12c);
+    *(float *)(out + 0x20) = 1.0f;
+    *(float *)(out + 0x24) = (float)this[0x4cc];
+}
+
+/* replaces 00050bf0: one value of a marker's bound parameters: the slot index for this axis (vf00(axis)), -1 for
+ * none; the parameter is refreshed (FUN_0013c070) and read from the owner's value array (+0xc). The decompiled body
+ * passed the axis as the slot and read the output pointer from the return address. */
+unsigned __thiscall FUN_0013c070(void *this, int index, float value);
+
+unsigned __thiscall FUN_00050bf0(void *marker, float *range, int axis)
+{
+    void **this = marker;
+    unsigned *out = (unsigned *)range;
+    unsigned char *owner = this[1];
+    if (!owner)
+        return 0;
+    int index = *((int *(__thiscall *)(void *, int))(*(void ***)this)[0])(this, axis);
+    if (index == -1)
+        return 0;
+    FUN_0013c070(owner, index, 0.0f);
+    *out = (*(unsigned **)(owner + 0xc))[index];
+    return 1;
+}
+
+/* replaces 0004fb60: the attract camera's aim (+0x1b4 x, +0x1b8 y). The camera rig (FUN_000519c0) has two markers,
+ * near (+0x38) and far (+0x60): their positions (FUN_00050c40) and the screen ranges each allows on x and y
+ * (FUN_00050bf0, axis 0/1). Over the tracked objects (the list at DAT_002f445c), t = how far their average height
+ * (+0x7c and +0x84) lies between the markers' heights, u = how far the lowest one's depth (+0x88) lies between their
+ * depths, both clamped to [0, 1]; aim = near + (far - near) * sin(t * pi / 2), and the same with u on y. Each call
+ * reuses arguments pushed for the one before, which the decompiler lost: it passed one or two of them, and the
+ * challenger screen read through -1. */
+void *thunk_FUN_000519c0(void);
+void __thiscall FUN_00050c40(void *marker, float *position);
+unsigned __thiscall FUN_00050bf0(void *marker, float *range, int axis);
+extern int *DAT_002f445c;
+float sinf(float x);
+
+void __thiscall FUN_0004fb60(unsigned char *this)
+{
+    *(float *)(this + 0x1b4) = 0.0f;
+    *(float *)(this + 0x1b8) = 0.0f;
+    unsigned char *rig = thunk_FUN_000519c0();
+    if (!*(int *)(rig + 0x3c) || !*(int *)(rig + 0x64))
+        return;
+    void *near_ = rig + 0x38, *far_ = rig + 0x60;
+    float a[3], b[3], lo[2] = { 0, 0 }, hi[2] = { 0, 0 };
+    FUN_00050c40(near_, a);
+    FUN_00050c40(far_, b);
+    FUN_00050bf0(near_, &lo[0], 0);
+    FUN_00050bf0(far_, &hi[0], 0);
+    FUN_00050bf0(near_, &lo[1], 1);
+    FUN_00050bf0(far_, &hi[1], 1);
+    float sum = 0.0f, lowest = a[2];
+    unsigned count = 0;
+    for (int *node = (int *)*DAT_002f445c; node != DAT_002f445c; node = (int *)*node, count++) {
+        unsigned char *obj = (unsigned char *)node[2];
+        sum += *(float *)(obj + 0x7c) + *(float *)(obj + 0x84);
+        if (*(float *)(obj + 0x88) < lowest)
+            lowest = *(float *)(obj + 0x88);
+    }
+    float t = (sum / (2.0f * (float)count) - a[1]) / (b[1] - a[1]);
+    t = t < 0.0f ? 0.0f : t > 1.0f ? 1.0f : t;
+    float u = (lowest - a[2]) / (b[2] - a[2]);
+    u = u < 0.0f ? 0.0f : u > 1.0f ? 1.0f : u;
+    *(float *)(this + 0x1b4) = (hi[0] - lo[0]) * sinf(3.1415927f * t * 0.5f) + lo[0];
+    *(float *)(this + 0x1b8) = (hi[1] - lo[1]) * sinf(3.1415927f * u * 0.5f) + lo[1];
+}
+
+/* replaces 0008f4e0: adds the four edge midpoints of a rectangle { x0, y0, x1, y1 } to this (FUN_0008f3c0, a point
+ * { 0, x, y } and weight 0): (mid x, y0), (mid x, y1), (x1, mid y), (x0, mid y). ECX passes through untouched to all
+ * four calls, and each point is built in the same stack slots; the decompiler showed two calls without arguments. */
+void __thiscall FUN_0008f3c0(void *this, float *point, float weight);
+
+void __thiscall FUN_0008f4e0(void *this, float *rect)
+{
+    float mid_x = (rect[2] - rect[0]) * 0.5f + rect[0], mid_y = (rect[1] - rect[3]) * 0.5f + rect[3];
+    float p[3] = { 0.0f, mid_x, rect[1] };
+    FUN_0008f3c0(this, p, 0.0f);
+    p[2] = rect[3];
+    FUN_0008f3c0(this, p, 0.0f);
+    p[1] = rect[2], p[2] = mid_y;
+    FUN_0008f3c0(this, p, 0.0f);
+    p[1] = rect[0];
+    FUN_0008f3c0(this, p, 0.0f);
+}
+
+/* replaces 0004f7a0: for each tracked object (the list at DAT_002f445c), its screen rectangle (+0x7c..+0x88) goes to
+ * FUN_0008f4e0 on this+0xe0. A method (lea edi,[ecx+0E0h]) that Ghidra typed without this. */
+void __thiscall FUN_0004f7a0(unsigned char *this)
+{
+    for (int *node = (int *)*DAT_002f445c; node != DAT_002f445c; node = (int *)*node) {
+        float rect[4];
+        memcpy(rect, (unsigned char *)node[2] + 0x7c, sizeof rect);
+        FUN_0008f4e0(this + 0xe0, rect);
+    }
+}
+
+/* replaces 0002e760, replaces 0002e7b0: an object's lower and upper bound on the AI's 2D plane: its position's y and z
+ * (vf07, slot 0x1c, into a scratch vector) minus or plus its radius (vf18, slot 0x60) on z, and 0 * radius on y.
+ * Both take the output as their one stack argument; the decompiled bodies wrote it through the return address. */
+static float *ai_extent(void **this, float *out, float sign)
+{
+    void **object = *(void ***)this;
+    void **vtable = *(void ***)object;
+    float radius = ((float(__thiscall *)(void *))vtable[0x60 / 4])(object);
+    float scratch[4];
+    float *at = ((float *(__thiscall *)(void *, float *))vtable[0x1c / 4])(object, scratch);
+    out[0] = at[1] + sign * (0.0f * radius);
+    out[1] = at[2] + sign * radius;
+    return out;
+}
+
+float *__thiscall FUN_0002e760(void **this, float *out) { return ai_extent(this, out, -1.0f); }
+void __thiscall FUN_0002e7b0(void **this, float *out) { ai_extent(this, out, 1.0f); }
+
 /* replaces 001cccf0: keeps the scheduler's task list (circular, doubly linked: next at +4, prev at +8, the head
  * itself the sentinel) sorted by priority (+0x14). When it's out of order: unlink the ring, merge sort it
  * (FUN_001ccc30, singly linked through +4), store the result as head->next and rebuild the prev links. The decompiled

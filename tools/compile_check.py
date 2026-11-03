@@ -583,6 +583,25 @@ def vcall_this(line, counter=None):
         sm = re.fullmatch(r"\s*(.+?)->slot00_[0-9a-f]+\s*\+\s*(.+?)\s*", inner) if inner else None
         if sm and not sm.group(1).lstrip().startswith("*") and sm.group(1).count("(") == sm.group(1).count(")"):
             inner = f"*({sm.group(1).strip()}) + {sm.group(2)}"
+        # "((int)*obj + 8)": the object's first word cast to add the slot offset, when the object is typed as
+        # something else (FUN_001b1340's float *param_2): its "this" went on the stack, and the slot-2 call wrote the
+        # camera position over the object's vtable pointer
+        if inner and re.match(r"\s*\((?:int|uint)\)\s*\*", inner):
+            inner = re.sub(r"^\s*\((?:int|uint)\)\s*", "", inner)
+        # "(**(code **)(vt + 0x10))((undefined *)obj, args)": the vtable already loaded into a local, and the call-site
+        # override showing "this" as the first argument. It went on the stack instead of in ECX (FUN_0015d3a0's
+        # call to the model's vf04, 45 calls)
+        lm = re.fullmatch(r"\s*(\w+)\s*\+\s*(0x[0-9a-f]+|\d+)\s*", inner) if inner else None
+        if lm and line[after:after + 2] == ")(" and line[after + 2:].startswith("(undefined *)"):
+            end = matching_paren(line, after + 1)
+            if end > 0:
+                arg_list = [vcall_this(a.strip(), counter) for a in split_top(line[after + 2:end], ",")]
+                this_arg = arg_list[0][len("(undefined *)"):]
+                types = ", ".join(["void *"] + ["int" if "({" in a else f"__typeof__({a})" for a in arg_list[1:]])
+                out.append(line[pos:i] + f"(({return_type(line[:i])} (__thiscall *)({types}))*(code **)"
+                           f"({lm.group(1)} + {lm.group(2)}))({', '.join(['(void *)' + this_arg] + arg_list[1:])})")
+                pos = end + 1
+                continue
         if inner is None or not inner.strip().startswith("*") or line[after:after + 2] != ")(":
             out.append(line[pos:j])
             pos = j
@@ -679,7 +698,7 @@ def slot0_calls(line, counter=None):
                 continue
             obj, after = line[j + 1:k], k + 1
         else:
-            om = re.match(r"\w+", line[j:])
+            om = re.match(r"\**\w+", line[j:])  # obj, or *node: the object a list node points to (FUN_00185470)
             if not om:
                 continue
             obj, after = om.group(0), j + om.end()
@@ -755,11 +774,41 @@ def fix_pseudo_storage(lines, class_methods):
             if old in joined:
                 body = joined.replace(old, new).splitlines(keepends=True)
                 SOURCE_PATCHES_APPLIED.add((m.group(1), old))
+        # A tail call (jmp through a vtable or pointer) that Ghidra shows as a call in a void function: the machine
+        # returns whatever the callee returned in EAX, and C dropped it. "return <call>;" in a function returning
+        # undefined4 (Character::GetEntityType made every fighter a plain 0x1f8-byte model, so the AI read past it).
+        joined = "".join(body)
+        tail = re.search(r"Treating indirect jump as call \*/\n(\s*)(\S[^\n]*;)\n\s*return;\n?\Z", joined)
+        first = next((n for n in range(1, len(sig_lines)) if sig_lines[n].strip()
+                      and not sig_lines[n].strip().startswith(("/*", "*", "//"))), None)
+        if tail and joined.count("return;") == 1 and first is not None and re.match(r"\s*void\s", sig_lines[first]):
+            body = (joined[:tail.start(1)] + tail.group(1) + "return " + tail.group(2) + "\n" +
+                    joined[tail.end():]).splitlines(keepends=True)
+            sig_lines[first] = re.sub(r"^(\s*)void\s", r"\1undefined4 ", sig_lines[first])
         sig = " ".join(l.strip() for l in sig_lines[1:-1] if not l.strip().startswith(("/*", "*", "//")))
         params = split_params(sig)
         names = [n for _, n in params]
         conv_regs = 1 if "__thiscall" in sig else 2 if "__fastcall" in sig else 0
         stack_params = names[conv_regs:]
+        # The jump hands the target this function's stack arguments as they are; Ghidra shows the call with none
+        # (FUN_000f2970 forwards its argument to the model's vf04, which then read the caller's frame)
+        if stack_params and "Treating indirect jump as call" in "".join(body):
+            fwd_names = [n for n in stack_params if re.fullmatch(r"\w+", n)]
+            fwd = ", ".join(fwd_names)
+            joined = re.sub(r"(Treating indirect jump as call \*/\n[^\n]*\))\(\);", lambda m: m.group(1) + f"({fwd});",
+                            "".join(body))
+
+            def forward_vcall(m):  # the same call after vcall_this: "(__thiscall *)(void *))...(vcall_N); })"
+                line = m.group(2)
+                tm = re.search(r"\(__thiscall \*\)\(void \*\)\)(.*)\((vcall_\d+|slot0_\d+)\); \}\)", line)
+                if not tm:
+                    return m.group(0)
+                types = "".join(f", __typeof__({n})" for n in fwd_names)
+                line = (line[:tm.start()] + f"(__thiscall *)(void *{types}))" + tm.group(1) +
+                        f"({tm.group(2)}, {fwd}); }})" + line[tm.end():])
+                return m.group(1) + line
+            body = re.sub(r"(Treating indirect jump as call \*/\n)([^\n]*)", forward_vcall, joined) \
+                .splitlines(keepends=True)
         text = "".join(body)
         # a variable-length local: ESP is restored from EBP on return (callees' argument pops can differ)
         decls = ["  char ghidra_keep_esp[ghidra_dynamic_one]; (void)ghidra_keep_esp;\n"]
@@ -1038,7 +1087,7 @@ def fix_inlined_strlen(lines):
     return lines
 
 
-CODE_CALL = re.compile(r"\(\*\*?\(code \*\*?\)")
+CODE_CALL = re.compile(r"\(\*\*?\(code \*\*?\)|\(\*[\w\[\].>-]+->(?:slot\w+|vftable->\w+)\)\s*$")  # also "(*this->vftable->slot32_04f480)" or "->vftable->PlayAnimation)" alone on a line
 
 
 def join_wrapped_calls(lines):
@@ -1287,6 +1336,16 @@ def main():
             pointer_globals.add(next(g for g in m.groups() if g))
         for m in re.finditer(rf"\b{_G}\s*\[", text):
             indexed_globals.add(m.group(1))
+        # "piVar13 = G + 1": a label assigned to a pointer local is a pointer (the resource list's begin, never
+        # dereferenced directly, was declared undefined4, so its "+ 1" stepped one byte); Ghidra's prefix gives the
+        # element size: pi/pu/pp/pf a dword, pc/pb a byte
+        for m in re.finditer(rf"\b(p[a-z])[A-Za-z]*Var\d+\s*=\s*{_G}\s*(?:;|[+-])", text):
+            pointer_globals.add(m.group(2))
+            if m.group(1) in ("pi", "pu", "pp", "pf"):
+                indexed_globals.add(m.group(2))
+        # "(int *)*G": what G points to is cast to a pointer, so the load is a dword (a list head's first link)
+        for m in re.finditer(rf"\(\w+ \*+\)\s*\*{_G}\b", text):
+            indexed_globals.add(m.group(1))
         for m in re.finditer(rf"\b{_G}\s*->", text):
             arrow_globals.add(m.group(1))
         # the same through a rewritten virtual call (slot_calls): "((__typeof__(G))(slot_1))->vftable->..."
@@ -1378,7 +1437,10 @@ def main():
     def integer_view(func):
         int_locals = set(re.findall(r"^\s+(?:int|uint|undefined4|dword)\s+(\w+)\s*;", func, re.M))
         views = {m.group(2) for m in re.finditer(rf"^\s+(\w+)\s*=\s*{_G}\s*;", func, re.M) if m.group(1) in int_locals}
-        views |= set(re.findall(rf"\((?:int|uint)\)\s*{_G}\b", func))
+        # (not the casts label_diff writes for "end - begin": the resource list's cleanup then stepped its element
+        # pointer by one byte, "piVar13 = (int)DAT_002f783c + 1", and read a garbage entry)
+        no_diffs = re.sub(rf"\((?:int|uint)\)\s*{_G}\s*-\s*\((?:int|uint)\)\s*{_G}\b", "", func)
+        views |= set(re.findall(rf"\((?:int|uint)\)\s*{_G}\b", no_diffs))
         # but a label the function dereferences ("*G = x", "G[i]") is a pointer there: Ghidra writes "(int)G" because
         # of that, and its "G + 1" is one element. The global light table's end pointer advanced one byte per light
         # ("DAT_0031565c = (int)DAT_0031565c + 1"), so every light lookup failed and lit objects drew black.
@@ -1390,6 +1452,8 @@ def main():
     # print G[1]), whatever type the label got here. Declared int *, C read G + 0x10.
     cast_offset = re.compile(r"(\*\s*\([^()]*\*\s*\)\s*\(\s*)(" + "|".join(map(re.escape, sorted(scaled))) +
                              r")(\s*[+-]\s*)") if scaled else None
+    scaled_alt = "|".join(map(re.escape, sorted(scaled)))
+    label_diff = re.compile(rf"(?<![\w.>*&)\]])({scaled_alt})\s*-\s*({scaled_alt})\b(?!\s*[\[(])") if scaled else None
     # float labels: integer constants stored into them and integer casts of them are bit copies, as for float locals
     floats = sorted(g for g in float_globals
                     if g not in pointer_globals and g not in wide_globals and g not in int_globals)
@@ -1402,6 +1466,11 @@ def main():
         new = arrow_ref.sub(lambda mm: f"(({arrow_types[mm.group(1)]} *){mm.group(1)})->", text) if arrow_ref else text
         if cast_offset:
             new = cast_offset.sub(r"\1(int)\2\3", new)
+        # "DAT_002f7840 - DAT_002f783c": two untyped labels the decompiler subtracts as integers (a vector's end
+        # and begin, in bytes); declared as dword pointers, C divided by 4. "(end - begin) & ~3" (non-empty) came
+        # out 0 for fewer than 4 entries, so the screen-resource release loop stopped before releasing anything.
+        if label_diff:
+            new = label_diff.sub(r"((int)\1 - (int)\2)", new)
         if floats:
             new = float_store.sub(r"*(uint *)&\1 = \2;", new)
             new = float_cast.sub(r"(\1)*(uint *)&\2", new)
@@ -1443,7 +1512,9 @@ def main():
             elif g in pointer_globals:
                 # The decompiler's own type for the label decides how its offsets scale: "G = (undefined1 *)..." means
                 # G + 4 is 4 bytes on, "G = (undefined4 *)..." means G[1] is the next dword. Use the type it assigns
-                # most; with no such cast, an indexed label is a dword array, anything else byte data.
+                # most; with no such cast, an indexed label is a dword array, and so is one whose "*G" is cast to a
+                # pointer; anything else is byte data. Declared a byte pointer, the definition list head's
+                # "(undefined4 *)*DAT_002f7bc4" read one byte of the first node's address, and the fight crashed.
                 t = pointer_types.get(g) or ("undefined4 *" if g in indexed_globals else "undefined1 *")
                 f.write(f"extern {t}{g}; /* dereferenced by the code */\n")
             elif g in wide_globals:

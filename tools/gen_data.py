@@ -94,16 +94,21 @@ def main():
             m = FUNC_HEADER.match(line)
             if not m:
                 continue
+            # the signature up to its "(": Ghidra wraps a long one with the name alone on a line, and read line by line
+            # those functions had no symbol here, so 1140 code pointers to them (BouncingProjectile's vf23 among
+            # them) stayed Xbox addresses
+            sig = ""
             for j in range(i + 1, min(i + 12, len(lines))):
                 # stubbed functions (weak, replaceable by port/) start with the attribute
                 s = lines[j].strip().replace("__attribute__((weak)) ", "")
                 if s.startswith(("/*", "//", "*")) or not s:
                     continue
-                names = PROTO_NAME.findall(s)
-                if names and names[0] in raw_by_cname:
-                    func_raw[int(m.group(1), 16)] = raw_by_cname[names[0]]
-                    break
                 if s == "{":
+                    break
+                sig += " " + s
+                names = [n for n in PROTO_NAME.findall(sig) if n in raw_by_cname]
+                if names:
+                    func_raw[int(m.group(1), 16)] = raw_by_cname[names[0]]
                     break
 
     # Thunks (a lone "jmp rel32": MenuLegal's ProcessInput slot is jmp MenuScreen::ProcessInput) aren't exported, so a

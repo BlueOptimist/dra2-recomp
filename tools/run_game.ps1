@@ -32,6 +32,7 @@ if ($Watch) {
 $out = Join-Path $tmp 'run.txt'
 $p = Start-Process $exe -NoNewWindow -PassThru -WorkingDirectory $tmp -RedirectStandardOutput $out `
     -RedirectStandardError (Join-Path $tmp 'run_err.txt')
+$null = $p.Handle  # keeps the process handle open, or ExitCode reads empty once it has exited
 if (-not $p.WaitForExit($Seconds * 1000)) { $p.Kill(); "[run] still running after $Seconds s (stopped)" }
 else { '[run] exit code {0} (0x{0:X8})' -f $p.ExitCode }
 python -I (Join-Path $root 'tools\symbolize.py') $exe "$mingw\llvm-nm.exe" $out
