@@ -39,7 +39,9 @@ The Xbox's CPU is a Pentium III, so the game's own machine code runs on a PC as 
     - The vertex program interpreter (`port/nv2a.c`) decodes a program once, again only after `nv_program` is written (`nv_program_writes`), and runs the decoded form. It matched the straightforward interpreter (`nv_vsh_run_reference`) on about 60 million vertices.
     - Native build only: `tools/build_native.ps1` compiles its own copies of the port's files at `-O2` (`build/native/port_*.obj`); `tools/build_all.ps1` builds them at `-O0`.
 - **Scripted input for testing:** `DRA2_INPUT=<frame>:<button>,...` presses buttons on player 1 at those frames (the `DRA2_SNAPSHOT` numbering), e.g. `DRA2_INPUT=1400:start,1680:left,1760:a` reaches the single-player menus.
-- The texture decoder (`port/gpu.c`) now checks that a texture's data is readable for the size its header gives; a 64x64 surface whose header claims a 16 KB pitch is skipped.
+- **Arena for testing:** `DRA2_ARENA=levels/<name>` (native build) makes every attract-mode demo fight take place in that arena, e.g. `DRA2_ARENA=levels/final_cavern`. It patches the demo's arena list builder (`0x54f90`) to take its single-arena branch.
+- The texture decoder (`port/gpu.c`) now checks that a texture's data is readable for the size its header gives. It decides between linear and swizzled from the format, as the NV2A does, not from whether the header has a Size word. The game passes `XGSetSurfaceHeader` a swizzled format with pitch 0 for some 64x64 surfaces, which left a 16 KB pitch in Size; read as linear, they were skipped. They are render targets the port doesn't draw into yet, so they stay empty.
+- **Close-up cave walls look grey:** the cavern's stone walls really are a grey stone texture times grey vertex colours. They only look like flat grey slabs when the camera is right next to them.
 
 ## Layout
 

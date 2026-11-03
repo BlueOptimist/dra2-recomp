@@ -269,13 +269,17 @@ static int texture_fits(const XTexture *x, unsigned bytes)
     return 0;
 }
 
+int linear_format(unsigned format);  /* port/d3d8.c */
+
 static void decode(CachedTexture *c, const XTexture *x)
 {
     unsigned format = (x->Format >> 8) & 0xff;
     unsigned w, h, pitch = 0;
     if (x->Size) {
+        /* the format says linear or swizzled, as on the NV2A: the game gives XGSetSurfaceHeader a swizzled format
+         * (A8R8G8B8) with pitch 0, which leaves 0xff (16 KB) in Size's pitch field */
         w = (x->Size & 0xfff) + 1, h = ((x->Size >> 12) & 0xfff) + 1, pitch = (((x->Size >> 24) & 0xff) + 1) * 64;
-        c->linear = 1;
+        c->linear = linear_format(format);
     } else {
         w = 1u << ((x->Format >> 20) & 0xf), h = 1u << ((x->Format >> 24) & 0xf);
     }

@@ -515,7 +515,7 @@ void __stdcall D3D8__D3DDevice_SetTransform(int state, float *matrix)
 
 /* XGSetTextureHeader(width, height, levels, usage, format, pool, texture, data, pitch): a swizzled texture has its
  * size as log2 fields in Format; a linear one (LIN_ formats) has width, height and pitch in Size */
-static int linear_format(unsigned f)
+int linear_format(unsigned f)  /* also port/gpu.c */
 {
     return (f >= 0x10 && f <= 0x18) || (f >= 0x1b && f <= 0x20) || (f >= 0x2e && f <= 0x30) ||
            (f >= 0x35 && f <= 0x37) || f == 0x40 || f == 0x41;
