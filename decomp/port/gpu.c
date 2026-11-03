@@ -744,6 +744,76 @@ static void combiners(void)
     IDirect3DDevice9_SetTextureStageState(d, 1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
 }
 
+/* Near-plane clipping. The NV2A clips triangles in homogeneous space; pretransformed vertices reach Direct3D 9
+ * already divided by w, so a triangle with a corner behind the camera (w < 0) would be drawn mirrored through
+ * infinity, a smear across the screen (the old west arena's ground, which passes under the camera). The vertex
+ * program's outputs are x, y, z already divided by w (plus the viewport offset) and w, so x*w, y*w, z*w, w are
+ * linear in clip space: those are interpolated along each edge that crosses z*w = 0 (the near plane, z = 0, which
+ * also takes everything behind the camera), and every other output along with them. */
+static GpuVertex clipped[0x20000];
+
+static float clip_distance(const GpuVertex *g) { return g->z / g->rhw; }
+
+static unsigned lerp_color(unsigned a, unsigned b, float t)
+{
+    unsigned r = 0;
+    for (int shift = 0; shift < 32; shift += 8) {
+        float ca = (float)((a >> shift) & 0xff), cb = (float)((b >> shift) & 0xff);
+        r |= (unsigned)(ca + (cb - ca) * t + 0.5f) << shift;
+    }
+    return r;
+}
+
+static GpuVertex clip_point(const GpuVertex *a, const GpuVertex *b)
+{
+    float da = clip_distance(a), db = clip_distance(b), t = da / (da - db);
+    float wa = 1.0f / a->rhw, wb = 1.0f / b->rhw, w = wa + (wb - wa) * t;
+    GpuVertex g;
+    g.x = (a->x * wa + (b->x * wb - a->x * wa) * t) / w;
+    g.y = (a->y * wa + (b->y * wb - a->y * wa) * t) / w;
+    g.z = 0.0f;
+    g.rhw = 1.0f / w;
+    g.diffuse = lerp_color(a->diffuse, b->diffuse, t);
+    g.specular = lerp_color(a->specular, b->specular, t);
+    for (int s = 0; s < 4; s++)
+        for (int i = 0; i < 4; i++)
+            g.t[s][i] = a->t[s][i] + (b->t[s][i] - a->t[s][i]) * t;
+    return g;
+}
+
+/* the n vertices in scratch, as triangles of the given type, clipped into a triangle list (back into scratch);
+ * returns the number of triangles */
+static unsigned clip_triangles(D3DPRIMITIVETYPE type, unsigned *n)
+{
+    unsigned in_tris = type == D3DPT_TRIANGLELIST ? *n / 3 : *n - 2, out = 0;
+    for (unsigned k = 0; k < in_tris && out + 6 <= sizeof clipped / sizeof *clipped; k++) {
+        const GpuVertex *tri[3];
+        if (type == D3DPT_TRIANGLELIST)
+            tri[0] = &scratch[3 * k], tri[1] = &scratch[3 * k + 1], tri[2] = &scratch[3 * k + 2];
+        else if (type == D3DPT_TRIANGLEFAN)
+            tri[0] = &scratch[0], tri[1] = &scratch[k + 1], tri[2] = &scratch[k + 2];
+        else if (k & 1)  /* strips alternate their winding */
+            tri[0] = &scratch[k + 1], tri[1] = &scratch[k], tri[2] = &scratch[k + 2];
+        else
+            tri[0] = &scratch[k], tri[1] = &scratch[k + 1], tri[2] = &scratch[k + 2];
+        GpuVertex poly[4];
+        int m = 0;
+        for (int e = 0; e < 3; e++) {
+            const GpuVertex *a = tri[e], *b = tri[(e + 1) % 3];
+            int a_in = clip_distance(a) >= 0.0f, b_in = clip_distance(b) >= 0.0f;
+            if (a_in)
+                poly[m++] = *a;
+            if (a_in != b_in)
+                poly[m++] = clip_point(a, b);
+        }
+        for (int i = 1; i + 1 < m; i++)
+            clipped[out++] = poly[0], clipped[out++] = poly[i], clipped[out++] = poly[i + 1];
+    }
+    memcpy(scratch, clipped, out * sizeof *clipped);
+    *n = out;
+    return out / 3;
+}
+
 void gpu_draw(int primitive, const GpuVertex *v, unsigned count)
 {
     if (!device || !count)
@@ -775,6 +845,17 @@ void gpu_draw(int primitive, const GpuVertex *v, unsigned count)
     #undef PUT
     if ((int)prims <= 0)
         return;
+    if (type == D3DPT_TRIANGLELIST || type == D3DPT_TRIANGLESTRIP || type == D3DPT_TRIANGLEFAN) {
+        unsigned behind = 0;
+        for (unsigned i = 0; i < n && !behind; i++)
+            behind = !(clip_distance(&scratch[i]) >= 0.0f);
+        if (behind) {
+            prims = clip_triangles(type, &n);
+            type = D3DPT_TRIANGLELIST;
+            if (!prims)
+                return;
+        }
+    }
     for (int s = 0; s < 4; s++)
         if (bound[s].texture && bound[s].linear)
             for (unsigned i = 0; i < n; i++)
@@ -905,6 +986,9 @@ static void snapshot(void)
         IDirect3DSurface9_Release(copy);
     IDirect3DSurface9_Release(back);
 }
+
+/* frames presented so far (DRA2_INPUT in port/xapi.c counts them) */
+unsigned gpu_frame(void) { return texture_frame; }
 
 void gpu_present(void)
 {

@@ -402,10 +402,40 @@ static void run_startup_tables(const unsigned char *xbe)
 }
 
 /* called by the launcher, whose code the image copy overwrites: never returns */
+/* Floating-point exceptions: the Xbox runs with them masked (an invalid operation gives a NaN), but the game's threads
+ * here sometimes run with invalid and divide-by-zero unmasked (x87 control word 0x0f5a, which nothing in the XBE
+ * loads). Report the first, mask them all in the faulting thread and let the instruction run again. */
+__declspec(dllimport) void *WINAPI AddVectoredExceptionHandler(unsigned long first, long(WINAPI *handler)(void *));
+static long WINAPI float_exception(void *pointers)
+{
+    unsigned long code = **(unsigned long **)pointers;
+    unsigned char *context = ((unsigned char **)pointers)[1];
+    unsigned long *control = (unsigned long *)(context + 0x1c), *status = (unsigned long *)(context + 0x20);
+    unsigned long *mxcsr = (unsigned long *)(context + 0xcc + 24);  /* in ExtendedRegisters, the FXSAVE area */
+    static int reported;
+    if (code >= 0xc000008d && code <= 0xc0000093) {  /* x87: STATUS_FLOAT_DENORMAL_OPERAND .. _UNDERFLOW */
+        if (!reported++)
+            printf("[native] x87 exception %08lx at %08lx (control word %04lx): masked\n", code,
+                   *(unsigned long *)(context + 0xb8), *control & 0xffff);
+        *control |= 0x3f;
+        *status &= ~0x80ffu;  /* the exception flags, ES and B */
+        return -1;  /* EXCEPTION_CONTINUE_EXECUTION */
+    }
+    if (code == 0xc00002b4 || code == 0xc00002b5) {  /* SSE: STATUS_FLOAT_MULTIPLE_FAULTS / _TRAPS */
+        if (!reported++)
+            printf("[native] SSE exception %08lx at %08lx (MXCSR %04lx): masked\n", code,
+                   *(unsigned long *)(context + 0xb8), *mxcsr & 0xffff);
+        *mxcsr = (*mxcsr | 0x1f80) & ~0x3fu;  /* mask all, clear the flags */
+        return -1;
+    }
+    return 0;  /* EXCEPTION_CONTINUE_SEARCH */
+}
+
 __declspec(dllexport) void native_main(void)
 {
     setvbuf(__acrt_iob_func(1), 0, 4 /* _IONBF */, 0);
     port_install_crash_reporter();
+    AddVectoredExceptionHandler(1, float_exception);
     unsigned size;
     unsigned char *xbe = read_xbe(&size);
     load_image(xbe);
@@ -415,8 +445,7 @@ __declspec(dllexport) void native_main(void)
     native_kernel_start();
     /* the game asks for gamepads with the Xbox's own device-type descriptor (XDEVICE_TYPE_GAMEPAD), not the port's */
     extern void *port_gamepad_type;
-    port_gamepad_type = (void *)0x28ab14;
-    /* what the Xbox startup thread (0x126fac) runs before main: process setup (heaps), the runtime's _rtinit and
+    port_gamepad_type = (void *)0x28ab14;    /* what the Xbox startup thread (0x126fac) runs before main: process setup (heaps), the runtime's _rtinit and
      * _cinit (which runs the startup tables, C initializers first) */
     for (unsigned k = 0; k < sizeof startup / sizeof startup[0]; k++) {
         port_init_index = (int)k;

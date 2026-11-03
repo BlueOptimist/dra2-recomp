@@ -4,7 +4,9 @@
  * buffer pointers and read uninitialised memory as each buffer's status. Its "playing" bit was set, every sound
  * seemed to play forever, and anything that waits for a sound to end waited forever: menu panels only finish once
  * their sounds stop (FUN_000c8b90 -> FUN_0011b790), so the title's panels and the attract mode's challenger screen
- * never completed. Here a buffer is a real object with memory to fill, and it reports itself stopped. */
+ * never completed. Here a buffer is a real object with memory to fill. A sound played once reports itself stopped at
+ * once; a looping one plays until it is stopped, as on the Xbox: the game's sound objects (FUN_00166f00) take a looping
+ * sound that stopped by itself as never keyed off, and releasing it is then a fatal error (FUN_00166810). */
 void *malloc(unsigned size);
 void *realloc(void *p, unsigned size);
 void free(void *p);
@@ -18,6 +20,7 @@ typedef struct {
     unsigned char *data;  /* what Lock hands out; the game writes its samples here */
     DWORD bytes;
     DWORD play, write;
+    int looping;  /* played with DSBPLAY_LOOPING and not stopped since */
 } SoundBuffer;
 
 static int sound_device;  /* the IDirectSound object: only its address is used */
@@ -30,6 +33,7 @@ static SoundBuffer *new_buffer(const XDSBUFFERDESC *desc)
     b->bytes = desc ? desc->buffer_bytes : 0;
     b->data = b->bytes ? malloc(b->bytes) : 0;
     b->play = b->write = 0;
+    b->looping = 0;
     return b;
 }
 
@@ -57,9 +61,8 @@ int __stdcall DSOUND__DirectSoundCreateBuffer(const XDSBUFFERDESC *desc, void **
 
 int __stdcall DSOUND__IDirectSoundBuffer_GetStatus(SoundBuffer *b, DWORD *status)
 {
-    (void)b;
     if (status)
-        *status = 0;  /* stopped: no DSBSTATUS_PLAYING */
+        *status = b && b->looping ? 1 | 4 : 0;  /* DSBSTATUS_PLAYING | DSBSTATUS_LOOPING, or stopped */
     return 0;
 }
 
@@ -124,10 +127,30 @@ int __stdcall DSOUND__IDirectSoundBuffer_Release(SoundBuffer *b)
     return 0;
 }
 
+int __stdcall DSOUND__IDirectSoundBuffer_Play(SoundBuffer *b, DWORD r1, DWORD r2, DWORD flags)
+{
+    (void)r1, (void)r2;
+    if (b)
+        b->looping = (flags & 1) != 0;  /* DSBPLAY_LOOPING */
+    return 0;
+}
+
+int __stdcall DSOUND__IDirectSoundBuffer_Stop(SoundBuffer *b)
+{
+    if (b)
+        b->looping = 0;
+    return 0;
+}
+
+int __stdcall DSOUND__IDirectSoundBuffer_StopEx(SoundBuffer *b, DWORD t1, DWORD t2, DWORD flags)
+{
+    (void)t1, (void)t2, (void)flags;
+    if (b)
+        b->looping = 0;
+    return 0;
+}
+
 /* everything else only changes how a sound would be heard */
-int __stdcall DSOUND__IDirectSoundBuffer_Play(void *b, DWORD r1, DWORD r2, DWORD flags) { (void)b, (void)r1, (void)r2, (void)flags; return 0; }
-int __stdcall DSOUND__IDirectSoundBuffer_Stop(void *b) { (void)b; return 0; }
-int __stdcall DSOUND__IDirectSoundBuffer_StopEx(void *b, DWORD t1, DWORD t2, DWORD flags) { (void)b, (void)t1, (void)t2, (void)flags; return 0; }
 int __stdcall DSOUND__IDirectSoundBuffer_Restore(void *b) { (void)b; return 0; }
 int __stdcall DSOUND__IDirectSoundBuffer_SetBufferData(void *b, void *data, DWORD bytes) { (void)b, (void)data, (void)bytes; return 0; }
 int __stdcall DSOUND__IDirectSoundBuffer_SetEG(void *b, void *eg) { (void)b, (void)eg; return 0; }

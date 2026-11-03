@@ -828,6 +828,60 @@ WINIMPORT DWORD WINAPI GetCurrentProcessId(void);
 
 static int key(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
 
+/* DRA2_INPUT=<frame>:<button>[,<frame>:<button>...]: scripted presses on player 1, for testing without a window in
+ * front (the frame numbers are those of DRA2_SNAPSHOT); each press is held for 8 frames. Buttons: start back a b x y
+ * up down left right. Example: DRA2_INPUT=1500:start,1700:a */
+unsigned gpu_frame(void);
+
+static void script_pad(WIN_STATE *st)
+{
+    static struct { DWORD frame; WORD bit; } presses[64];
+    static int count = -1;
+    static DWORD packets, last;
+    if (count < 0) {
+        static const struct { const char *name; WORD bit; } names[] = {
+            { "up", 0x0001 }, { "down", 0x0002 }, { "left", 0x0004 }, { "right", 0x0008 }, { "start", 0x0010 },
+            { "back", 0x0020 }, { "a", 0x1000 }, { "b", 0x2000 }, { "x", 0x4000 }, { "y", 0x8000 },
+        };
+        char v[1024];
+        DWORD n = GetEnvironmentVariableA("DRA2_INPUT", v, sizeof v);
+        count = 0;
+        const char *p = n && n < sizeof v ? v : "";
+        while (*p && count < 64) {
+            DWORD frame = 0;
+            while (*p >= '0' && *p <= '9')
+                frame = frame * 10 + (DWORD)(*p++ - '0');
+            if (*p++ != ':')
+                break;
+            unsigned len = 0;
+            while (p[len] && p[len] != ',')
+                len++;
+            for (unsigned k = 0; k < sizeof names / sizeof names[0]; k++) {
+                unsigned i = 0;
+                while (i < len && names[k].name[i] == p[i])
+                    i++;
+                if (i == len && !names[k].name[i])
+                    presses[count].frame = frame, presses[count++].bit = names[k].bit;
+            }
+            p += len;
+            if (*p == ',')
+                p++;
+        }
+    }
+    DWORD now = gpu_frame(), held = 0;
+    for (int k = 0; k < count; k++)
+        if (now >= presses[k].frame && now < presses[k].frame + 8)
+            held |= presses[k].bit;
+    if (held != last)
+        packets++, last = held;
+    st->Gamepad.wButtons |= (WORD)held;
+    if (held & 0xf) {  /* directions push the left stick too: the menus steer with it */
+        st->Gamepad.sThumbLX = (short)(held & 4 ? -32767 : held & 8 ? 32767 : 0);
+        st->Gamepad.sThumbLY = (short)(held & 2 ? -32767 : held & 1 ? 32767 : 0);
+    }
+    st->dwPacketNumber += packets << 16;  /* a new packet with each change (the keyboard counts in the low half) */
+}
+
 static void keyboard_pad(WIN_STATE *st)
 {
     DWORD owner = 0;
@@ -876,7 +930,7 @@ DWORD __stdcall XAPILIB__XInputGetState(void *handle, XBOX_STATE *out)
         memset(&st, 0, sizeof st);  /* player 1 without a controller: the keyboard alone */
     }
     if (port == 0)
-        keyboard_pad(&st);
+        keyboard_pad(&st), script_pad(&st);
     WORD b = st.Gamepad.wButtons;
     out->dwPacketNumber = st.dwPacketNumber;
     out->Gamepad.wButtons = b & 0x00FF;  /* d-pad, start, back, thumb clicks: same bits on both */
