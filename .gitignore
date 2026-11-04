@@ -7,6 +7,9 @@
 !/.gitignore
 !/.gitattributes
 !/README.md
+# the launcher program (tools/launcher/build.ps1), built with the drawn icon (tools/launcher/icon.ico) only: a build
+# with a cover.ico from the game's art must never be committed
+!/DRA 2.exe
 !/.github/
 
 # vendored open-source code, unmodified, with its license (Lua 5.0.3: MIT, see third_party/lua-5.0.3/COPYRIGHT)

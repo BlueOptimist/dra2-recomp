@@ -28,14 +28,7 @@ What you get: the game's own code, from your disc, running natively on Windows. 
    ```
    git clone https://github.com/BlueOptimist/dra2-recomp.git
    ```
-2. **Get the launcher, `DRA 2.exe`.** It isn't in the repository. Either:
-   - **Download it:** on GitHub, open the repository's Actions tab, pick the latest green run and download **DRA 2 launcher**. Unzip it and put `DRA 2.exe` in the repository folder.
-   - **Build it** with the compiler from above:
-     ```
-     powershell -ExecutionPolicy Bypass -File tools\launcher\build.ps1
-     ```
-
-   Then double-click `DRA 2.exe`. It has to stay in the repository folder, and you can pin it or make a shortcut to it. Its Home page shows three cards: game data, build and saves. The first two say *Missing* and *Not built* on a fresh clone.
+2. **Open the launcher:** double-click **`DRA 2.exe`** in the repository folder. It has to stay there; you can pin it or make a shortcut to it. Its Home page shows three cards: game data, build and saves. The first two say *Missing* and *Not built* on a fresh clone. (`DRA 2.exe` is a small program that only starts `tools/launcher.ps1`. To build it yourself from `tools/launcher/play.c` instead, run `powershell -ExecutionPolicy Bypass -File tools\launcher\build.ps1`.)
 3. **Extract the disc:** Advanced → **Extract the disc image**. If there's an `.iso` in the repository folder, it uses that one; otherwise it asks for it. It writes `extracted/` (2,863 files, about 1.6 GB) and takes a few minutes. The image itself is only read. From a terminal instead:
    ```
    python -I tools\xdvdfs_extract.py "D:\path\to\Digimon Rumble Arena 2 (USA).iso" extracted
@@ -53,11 +46,11 @@ What you get: the game's own code, from your disc, running natively on Windows. 
 - *The build says `default.xbe` is missing:* extract first. If you pointed Advanced → game data folder somewhere else, the launcher's Rebuild uses that folder; from a terminal, set `DRA2_DATA` to it.
 - *The game closes or shows a crash message:* Advanced → **Open the last game log** (`logs/last_run.txt`). Its last lines say what went wrong. When reporting a problem, include them.
 - *Scripts won't run ("running scripts is disabled"):* run the commands above as written: `-ExecutionPolicy Bypass` lets them run. `DRA 2.exe` passes it itself.
-- *Windows SmartScreen warns about `DRA 2.exe`:* it's unsigned. *More info → Run anyway*, or build it yourself (step 2).
+- *Windows SmartScreen warns about `DRA 2.exe`:* it's unsigned. *More info → Run anyway*, or build it yourself (step 2). A git clone doesn't trigger the warning; a repository zip downloaded from GitHub can.
 
 ### Playing
 
-Double-click **`DRA 2.exe`** to open the launcher (`tools/launcher.ps1`, a WPF window). `DRA 2.exe` is built into this folder by `tools/launcher/build.ps1` from `tools/launcher/play.c`. It isn't in the repository. Each CI run on GitHub (the Actions tab) builds one with the drawn icon as the **DRA 2 launcher** download; put it in this folder. Its icon is drawn by `tools/launcher/make_icon.ps1`. To use a picture of your own instead, such as the game's cover, run `make_icon.ps1 -Image <picture>` and then `build.ps1`. That writes `tools/launcher/cover.ico`, which stays out of the repository and is also used for the launcher window. The launcher has six pages and a PLAY button:
+Double-click **`DRA 2.exe`** to open the launcher (`tools/launcher.ps1`, a WPF window). `DRA 2.exe` is in the repository, built by `tools/launcher/build.ps1` from `tools/launcher/play.c`. Each CI run on GitHub (the Actions tab) also builds one, as the **DRA 2 launcher** download. Its icon is drawn by `tools/launcher/make_icon.ps1`. To use a picture of your own instead, such as the game's cover, run `make_icon.ps1 -Image <picture>` and then `build.ps1`. That writes `tools/launcher/cover.ico`, which stays out of the repository and is also used for the launcher window. A `DRA 2.exe` built with it holds that picture, so it must not be committed: move `cover.ico` away and rebuild before committing `DRA 2.exe`. The launcher has six pages and a PLAY button:
 - **Home:** whether the game data, the build and saves are ready, plus quick settings.
 - **Display:** a 1×–4× window or fullscreen (Alt+Enter or F11 switches in game). The resolution is 1080p by default, or 480p (the Xbox's), 720p, 1440p or 4K. Anti-aliasing (MSAA) smooths the 3D edges: 4× by default, or off (as on the Xbox), 2× or 8×. The picture shape is 4:3 as on the Xbox, or 16:10, 16:9 or 21:9, which show more of each scene at the sides without stretching it. There's also the Xbox's soft display, on by default.
 - **Quick start** (on the Advanced page, on by default): the copyright screen shows for a second instead of five, and the Bandai and Black Ship logos are skipped, so the title comes up about 14 seconds sooner. The game's own loading is already quick (an arena loads in about 0.2 s); the rest of the wait is screens that run for a set time. The game tips screen before a fight stays up to 10 seconds, and A skips it, as on the Xbox.
