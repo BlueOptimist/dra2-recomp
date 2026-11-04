@@ -1228,6 +1228,28 @@ static void set_addressing(void)
     }
 }
 
+/* Mip level for 2D. The game draws the HUD smaller than its textures, so at 480 lines the Xbox reads their smaller
+ * mipmaps; at a higher resolution the same quads are magnified onto the full-size image, which isn't always what the
+ * Xbox showed (the score panels' full-size image has a dashed row that the smaller ones don't). 2D draws are biased
+ * by log2 of the scale, so they read the mip level the Xbox did; 3D keeps the sharper ones. */
+static void set_mip_bias(int two_d)
+{
+    static float current = -1.0f, bias_2d = -1.0f;
+    if (bias_2d < 0.0f) {  /* log2(scale_y): ln s = 2 (y + y^3/3 + y^5/5 + ...), y = (s - 1) / (s + 1) */
+        float s = scale_y > 1.0f ? scale_y : 1.0f, octaves = 0.0f;
+        while (s >= 2.0f)
+            s *= 0.5f, octaves += 1.0f;
+        float y = (s - 1.0f) / (s + 1.0f), y2 = y * y;
+        bias_2d = octaves + 2.0f * y * (1.0f + y2 / 3.0f + y2 * y2 / 5.0f + y2 * y2 * y2 / 7.0f) * 1.44269504f;
+    }
+    float bias = two_d && !drawing_into ? bias_2d : 0.0f;
+    if (bias == current)
+        return;
+    current = bias;
+    for (DWORD s = 0; s < 4; s++)
+        IDirect3DDevice9_SetSamplerState(device, s, D3DSAMP_MIPMAPLODBIAS, *(DWORD *)&bias);
+}
+
 void gpu_draw(int primitive, const GpuVertex *v, unsigned count)
 {
     if (!device || !count)
@@ -1240,13 +1262,14 @@ void gpu_draw(int primitive, const GpuVertex *v, unsigned count)
     unsigned prims;
     /* widescreen, on the back buffer: 3D spread over the width, 2D in the middle unless it spans the whole width */
     int wide = !drawing_into && buffer_width != game_width, full = 0, two_d = gpu_draw_2d;
-    if (wide && !two_d) {
+    if (!two_d) {
         /* the HUD panels and some text come through a vertex program that passes screen coordinates through: every
          * vertex at rhw 1 and the same depth, which projected 3D never is. They're 2D too. */
         two_d = 1;
         for (unsigned i = 0; i < count && two_d; i++)
             two_d = v[i].rhw == 1.0f && v[i].z == v[0].z;
     }
+    set_mip_bias(two_d);
     if (wide && two_d) {
         float lo = v[0].x, hi = v[0].x;
         for (unsigned i = 1; i < count; i++)
