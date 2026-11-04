@@ -1175,6 +1175,105 @@ static void snapshot(void)
 /* frames presented so far (DRA2_INPUT in port/xapi.c counts them) */
 unsigned gpu_frame(void) { return texture_frame; }
 
+/* The Xbox's soft display (D3DRS_SOFTDISPLAY, on unless a game turns it off, and this one doesn't): the video encoder
+ * blends each line with its neighbours. Without it the art's fine horizontal detail, such as the stripes in the HUD
+ * panels, is much harsher than on the console. This does the same on the finished frame, with weights 1-2-1.
+ * DRA2_SOFT=0 turns it off. */
+static void soft_display(void)
+{
+    static int state = -1;  /* -1 not set up, 0 off or failed, 1 on */
+    static IDirect3DTexture9 *copy;
+    static IDirect3DPixelShader9 *shader;
+    static IDirect3DStateBlock9 *saved;
+    static float line;  /* one line, in texture coordinates */
+    IDirect3DSurface9 *back = 0, *target = 0, *copy_surface = 0;
+    D3DSURFACE_DESC desc;
+    if (state == 0)
+        return;
+    if (IDirect3DDevice9_GetBackBuffer(device, 0, 0, D3DBACKBUFFER_TYPE_MONO, &back) != D3D_OK)
+        return;
+    IDirect3DSurface9_GetDesc(back, &desc);
+    if (state == -1) {
+        char v[8] = "";
+        GetEnvironmentVariableA("DRA2_SOFT", v, sizeof v);
+        state = 0;
+        typedef HRESULT(WINAPI *D3DCompileFn)(const void *, SIZE_T, const char *, const void *, void *, const char *,
+                                               const char *, UINT, UINT, ID3DBlob **, ID3DBlob **);
+        HMODULE m = v[0] == '0' ? 0 : LoadLibraryA("d3dcompiler_47.dll");
+        D3DCompileFn compile = m ? (D3DCompileFn)(void *)GetProcAddress(m, "D3DCompile") : 0;
+        static const char source[] =
+            "sampler2D s : register(s0);\n"
+            "float4 down : register(c0);\n"
+            "float4 main(float2 t : TEXCOORD0) : COLOR\n"
+            "{\n"
+            "  return 0.25 * tex2D(s, t - down.xy) + 0.5 * tex2D(s, t) + 0.25 * tex2D(s, t + down.xy);\n"
+            "}\n";
+        ID3DBlob *blob = 0, *errors = 0;
+        if (compile && SUCCEEDED(compile(source, sizeof source - 1, "soft", 0, 0, "main", "ps_2_0", 0, 0, &blob, &errors)) &&
+            SUCCEEDED(IDirect3DDevice9_CreatePixelShader(device, (const DWORD *)ID3D10Blob_GetBufferPointer(blob), &shader)) &&
+            SUCCEEDED(IDirect3DDevice9_CreateTexture(device, desc.Width, desc.Height, 1, D3DUSAGE_RENDERTARGET, desc.Format,
+                                                     D3DPOOL_DEFAULT, &copy, 0)) &&
+            SUCCEEDED(IDirect3DDevice9_CreateStateBlock(device, D3DSBT_ALL, &saved)))
+            state = 1;
+        if (blob)
+            ID3D10Blob_Release(blob);
+        if (errors)
+            ID3D10Blob_Release(errors);
+        line = 1.0f / (float)desc.Height;
+        printf("[gpu] soft display %s\n", state ? "on" : v[0] == '0' ? "off (DRA2_SOFT=0)" : "unavailable");
+        if (!state) {
+            IDirect3DSurface9_Release(back);
+            return;
+        }
+    }
+    IDirect3DTexture9_GetSurfaceLevel(copy, 0, &copy_surface);
+    IDirect3DDevice9_StretchRect(device, back, 0, copy_surface, 0, D3DTEXF_NONE);
+    IDirect3DSurface9_Release(copy_surface);
+
+    /* the game's state stays as it was: the state block holds all of it but the render target */
+    IDirect3DStateBlock9_Capture(saved);
+    IDirect3DDevice9_GetRenderTarget(device, 0, &target);
+    IDirect3DDevice9 *d = device;
+    IDirect3DDevice9_SetRenderTarget(d, 0, back);
+    D3DVIEWPORT9 vp = { 0, 0, desc.Width, desc.Height, 0, 1 };
+    IDirect3DDevice9_SetViewport(d, &vp);
+    IDirect3DDevice9_SetRenderState(d, D3DRS_ZENABLE, D3DZB_FALSE);
+    IDirect3DDevice9_SetRenderState(d, D3DRS_ZWRITEENABLE, FALSE);
+    IDirect3DDevice9_SetRenderState(d, D3DRS_ALPHABLENDENABLE, FALSE);
+    IDirect3DDevice9_SetRenderState(d, D3DRS_ALPHATESTENABLE, FALSE);
+    IDirect3DDevice9_SetRenderState(d, D3DRS_STENCILENABLE, FALSE);
+    IDirect3DDevice9_SetRenderState(d, D3DRS_SCISSORTESTENABLE, FALSE);
+    IDirect3DDevice9_SetRenderState(d, D3DRS_FOGENABLE, FALSE);
+    IDirect3DDevice9_SetRenderState(d, D3DRS_CULLMODE, D3DCULL_NONE);
+    IDirect3DDevice9_SetRenderState(d, D3DRS_CLIPPLANEENABLE, 0);
+    IDirect3DDevice9_SetRenderState(d, D3DRS_COLORWRITEENABLE, 0xf);
+    IDirect3DDevice9_SetVertexShader(d, 0);
+    IDirect3DDevice9_SetPixelShader(d, shader);
+    float c0[4] = { 0, line, 0, 0 };
+    IDirect3DDevice9_SetPixelShaderConstantF(d, 0, c0, 1);
+    IDirect3DDevice9_SetTexture(d, 0, (IDirect3DBaseTexture9 *)copy);
+    IDirect3DDevice9_SetSamplerState(d, 0, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+    IDirect3DDevice9_SetSamplerState(d, 0, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+    IDirect3DDevice9_SetSamplerState(d, 0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+    IDirect3DDevice9_SetSamplerState(d, 0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+    IDirect3DDevice9_SetSamplerState(d, 0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+    IDirect3DDevice9_SetSamplerState(d, 0, D3DSAMP_SRGBTEXTURE, FALSE);
+    IDirect3DDevice9_SetRenderState(d, D3DRS_SRGBWRITEENABLE, FALSE);
+    IDirect3DDevice9_SetFVF(d, D3DFVF_XYZRHW | D3DFVF_TEX1);
+    float w = (float)desc.Width - 0.5f, h = (float)desc.Height - 0.5f;  /* texel centres on pixel centres */
+    float quad[4][6] = { { -0.5f, -0.5f, 0, 1, 0, 0 }, { w, -0.5f, 0, 1, 1, 0 },
+                         { -0.5f, h, 0, 1, 0, 1 }, { w, h, 0, 1, 1, 1 } };
+    IDirect3DDevice9_BeginScene(d);
+    IDirect3DDevice9_DrawPrimitiveUP(d, D3DPT_TRIANGLESTRIP, 2, quad, sizeof quad[0]);
+    IDirect3DDevice9_EndScene(d);
+    IDirect3DDevice9_SetTexture(d, 0, 0);
+    IDirect3DDevice9_SetRenderTarget(d, 0, target);
+    IDirect3DStateBlock9_Apply(saved);
+    if (target)
+        IDirect3DSurface9_Release(target);
+    IDirect3DSurface9_Release(back);
+}
+
 void gpu_present(void)
 {
     texture_frame++;
@@ -1183,6 +1282,7 @@ void gpu_present(void)
             IDirect3DDevice9_EndScene(device);
             in_scene = 0;
         }
+        soft_display();
         snapshot();
         /* the largest 4:3 rectangle in the middle of the window */
         RECT client, picture;

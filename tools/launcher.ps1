@@ -25,6 +25,7 @@ $backups = Join-Path $root 'save_backups'
 # ------------------------------------------------------------------------------------------------- settings --
 $settings = [ordered]@{
     display = '2'                                 # 1..4 (window scale) or fullscreen
+    soft = $true                                  # the Xbox's soft display (DRA2_SOFT)
     sound = $true
     record = $false
     hideWhilePlaying = $true
@@ -316,6 +317,10 @@ function Save-Settings { $settings | ConvertTo-Json | Set-Content $settingsFile 
           <TextBlock Text="The game draws at 640 × 480 and is scaled to the window, keeping its 4:3 shape." Style="{StaticResource Sub}"/>
           <TextBlock Text="DISPLAY MODE" Style="{StaticResource Label}"/>
           <WrapPanel x:Name="displayModes"/>
+          <TextBlock Text="PICTURE" Style="{StaticResource Label}"/>
+          <CheckBox x:Name="displaySoft" Style="{StaticResource Switch}" Content="Soft display, like the Xbox's video output"/>
+          <TextBlock Style="{StaticResource Sub}" Margin="0,4,0,0"
+                     Text="Blends each line with its neighbours, as the console does. Off gives a sharper picture."/>
           <Border Style="{StaticResource Card}" Margin="0,16,0,0" Width="560" HorizontalAlignment="Left">
             <TextBlock Style="{StaticResource Sub}" Foreground="#BCCBF0">
               In the game, press <Run Foreground="#FFB21E" FontWeight="Bold">Alt+Enter</Run> or <Run Foreground="#FFB21E" FontWeight="Bold">F11</Run>
@@ -530,6 +535,8 @@ $ui.quickSound.IsChecked = $settings.sound
 $ui.audioSound.IsChecked = $settings.sound
 $ui.audioRecord.IsChecked = $settings.record
 $ui.hideWhilePlaying.IsChecked = $settings.hideWhilePlaying
+$ui.displaySoft.IsChecked = $settings.soft
+$ui.displaySoft.Add_Click({ $settings.soft = [bool]$ui.displaySoft.IsChecked; Save-Settings })
 $ui.savesPath.Text = $settings.savesPath
 $ui.dataPath.Text = $settings.dataPath
 foreach ($box in 'quickSound', 'audioSound') {
@@ -610,12 +617,13 @@ function Start-Game {
     if (-not (Test-Path $exe)) { Set-Status 'The game isn''t built yet.' 'Advanced → Rebuild the game.'; return }
     New-Item -ItemType Directory -Force $settings.savesPath, $logs | Out-Null
     foreach ($name in 'DRA2_INPUT', 'DRA2_ARENA', 'DRA2_SNAPSHOT', 'DRA2_LOGFRAME', 'DRA2_LOGDRAW', 'DRA2_SAMPLE',
-                      'DRA2_MUTE', 'DRA2_SOUNDDUMP', 'DRA2_LOGSOUND', 'DRA2_WINDOW') {
+                      'DRA2_MUTE', 'DRA2_SOUNDDUMP', 'DRA2_LOGSOUND', 'DRA2_WINDOW', 'DRA2_SOFT') {
         [Environment]::SetEnvironmentVariable($name, $null, 'Process')
     }
     $env:DRA2_DATA = $settings.dataPath
     $env:DRA2_SAVES = $settings.savesPath
     $env:DRA2_WINDOW = $settings.display
+    if (-not $settings.soft) { $env:DRA2_SOFT = '0' }
     if (-not $settings.sound) { $env:DRA2_MUTE = '1' }
     if ($settings.record) { $env:DRA2_SOUNDDUMP = Join-Path $logs 'sound.wav' }
     $script:gameLog = Join-Path $logs 'last_run.txt'
