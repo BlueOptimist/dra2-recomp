@@ -27,6 +27,7 @@ $settings = [ordered]@{
     display = '2'                                 # 1..4 (window scale) or fullscreen
     aspect = '4:3'                                # the picture's shape (DRA2_ASPECT): 4:3, 16:10, 16:9 or 21:9
     resolution = '1080'                           # lines drawn (DRA2_RESOLUTION): 480 (original), 720, 1080, 1440, 2160
+    msaa = '4'                                    # anti-aliasing samples (DRA2_MSAA): 0 (original), 2, 4, 8
     keys = ''                                     # keyboard bindings (DRA2_KEYS): control=vk[+vk],... in hex; '' = defaults
     pad = ''                                      # controller bindings (DRA2_PAD): control=button,...; '' = defaults
     soft = $true                                  # the Xbox's soft display (DRA2_SOFT)
@@ -339,27 +340,21 @@ function Save-Settings { $settings | ConvertTo-Json | Set-Content $settingsFile 
         <!-- DISPLAY -->
         <StackPanel x:Name="pageDisplay" Visibility="Collapsed">
           <TextBlock Text="DISPLAY" Style="{StaticResource Heading}"/>
-          <TextBlock Text="The picture is drawn at the resolution you pick and scaled to the window, keeping the shape you pick below." Style="{StaticResource Sub}"/>
+          <TextBlock Style="{StaticResource Sub}">In the game, <Run Foreground="#FFB21E" FontWeight="Bold">Alt+Enter</Run> or <Run Foreground="#FFB21E" FontWeight="Bold">F11</Run> switches between the window and fullscreen. The window can be resized; black bars fill the sides.</TextBlock>
           <TextBlock Text="DISPLAY MODE" Style="{StaticResource Label}"/>
           <WrapPanel x:Name="displayModes"/>
           <TextBlock Text="RESOLUTION" Style="{StaticResource Label}"/>
           <WrapPanel x:Name="resolutionModes"/>
           <TextBlock Style="{StaticResource Sub}" Margin="0,4,0,0"
                      Text="Higher resolutions give sharper edges on the 3D scenes, HUD and text. The game's own textures stay as they are."/>
+          <TextBlock Text="ANTI-ALIASING  (MSAA: smooths the stair-stepped edges of the 3D scenes)" Style="{StaticResource Label}"/>
+          <WrapPanel x:Name="msaaModes"/>
           <TextBlock Text="PICTURE SHAPE" Style="{StaticResource Label}"/>
           <WrapPanel x:Name="aspectModes"/>
           <TextBlock Style="{StaticResource Sub}" Margin="0,4,0,0"
                      Text="Wider shapes show more of each scene at the sides. Nothing is stretched: the HUD and menus keep their shape in the middle."/>
           <TextBlock Text="PICTURE" Style="{StaticResource Label}"/>
-          <CheckBox x:Name="displaySoft" Style="{StaticResource Switch}" Content="Soft display, like the Xbox's video output"/>
-          <TextBlock Style="{StaticResource Sub}" Margin="0,4,0,0"
-                     Text="Blends each line with its neighbours, as the console does. Off gives a sharper picture."/>
-          <Border Style="{StaticResource Card}" Margin="0,16,0,0" Width="560" HorizontalAlignment="Left">
-            <TextBlock Style="{StaticResource Sub}" Foreground="#BCCBF0">
-              In the game, press <Run Foreground="#FFB21E" FontWeight="Bold">Alt+Enter</Run> or <Run Foreground="#FFB21E" FontWeight="Bold">F11</Run>
-              to switch between the window and fullscreen at any time. The window can also be resized; black bars fill the sides.
-            </TextBlock>
-          </Border>
+          <CheckBox x:Name="displaySoft" Style="{StaticResource Switch}" Content="Soft display: blends each line with its neighbours, like the Xbox's video output (off is sharper)"/>
         </StackPanel>
 
         <!-- AUDIO -->
@@ -571,6 +566,16 @@ foreach ($key in $resolutions.Keys) {
     $chip.IsChecked = ([string]$settings.resolution -eq $key)
     $chip.Add_Checked({ param($s) $settings.resolution = [string]$s.Tag; Save-Settings })
     $ui.resolutionModes.Children.Add($chip) | Out-Null
+}
+
+# anti-aliasing: multisamples per pixel (DRA2_MSAA); the game's own is none
+$msaaModes = [ordered]@{ '0' = 'Off  (original)'; '2' = '2×'; '4' = '4×'; '8' = '8×' }
+foreach ($key in $msaaModes.Keys) {
+    $chip = New-Object Windows.Controls.RadioButton -Property @{ Content = $msaaModes[$key]; Tag = $key; GroupName = 'msaa' }
+    $chip.Style = $window.FindResource('Chip')
+    $chip.IsChecked = ([string]$settings.msaa -eq $key)
+    $chip.Add_Checked({ param($s) $settings.msaa = [string]$s.Tag; Save-Settings })
+    $ui.msaaModes.Children.Add($chip) | Out-Null
 }
 
 # controls: rebinding the keyboard (DRA2_KEYS) and the controller's buttons (DRA2_PAD), as port/xapi.c reads them.
@@ -822,7 +827,7 @@ function Start-Game {
     New-Item -ItemType Directory -Force $settings.savesPath, $logs | Out-Null
     foreach ($name in 'DRA2_INPUT', 'DRA2_ARENA', 'DRA2_SNAPSHOT', 'DRA2_LOGFRAME', 'DRA2_LOGDRAW', 'DRA2_SAMPLE',
                       'DRA2_MUTE', 'DRA2_SOUNDDUMP', 'DRA2_LOGSOUND', 'DRA2_WINDOW', 'DRA2_SOFT', 'DRA2_ASPECT',
-                      'DRA2_RESOLUTION', 'DRA2_KEYS', 'DRA2_PAD', 'DRA2_QUICKINTRO') {
+                      'DRA2_RESOLUTION', 'DRA2_KEYS', 'DRA2_PAD', 'DRA2_QUICKINTRO', 'DRA2_MSAA') {
         [Environment]::SetEnvironmentVariable($name, $null, 'Process')
     }
     $env:DRA2_DATA = $settings.dataPath
@@ -831,6 +836,7 @@ function Start-Game {
     if (-not $settings.soft) { $env:DRA2_SOFT = '0' }
     if ($settings.aspect -ne '4:3') { $env:DRA2_ASPECT = $settings.aspect }
     $env:DRA2_RESOLUTION = [string]$settings.resolution
+    $env:DRA2_MSAA = [string]$settings.msaa
     $env:DRA2_KEYS = Keys-Text
     if ($settings.pad) { $env:DRA2_PAD = [string]$settings.pad }
     if (-not $settings.sound) { $env:DRA2_MUTE = '1' }

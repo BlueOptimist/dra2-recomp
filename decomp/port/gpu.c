@@ -53,6 +53,30 @@ static unsigned resolution_setting(void)
     return lines < 480 ? 480 : lines > 4320 ? 4320 : (unsigned)lines;
 }
 
+/* Anti-aliasing: DRA2_MSAA=2, 4 or 8 multisamples the back buffer and its depth buffer (the Xbox drew without; 0 or
+ * unset is off). The highest count up to that the card offers for both is used. Only the back buffer is
+ * multisampled: the targets the game reads back as textures (shadows) keep single samples, so they get a depth
+ * buffer of their own (target_depth), and anything read from the back buffer is resolved first (StretchRect). */
+static D3DMULTISAMPLE_TYPE msaa;
+static IDirect3DSurface9 *target_depth;
+
+static D3DMULTISAMPLE_TYPE msaa_setting(IDirect3D9 *d)
+{
+    char v[16] = "";
+    GetEnvironmentVariableA("DRA2_MSAA", v, sizeof v);
+    int want = atoi(v);
+    for (int n = want > 8 ? 8 : want; n >= 2; n--) {
+        if (SUCCEEDED(IDirect3D9_CheckDeviceMultiSampleType(d, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, D3DFMT_X8R8G8B8, TRUE,
+                                                            (D3DMULTISAMPLE_TYPE)n, 0)) &&
+            SUCCEEDED(IDirect3D9_CheckDeviceMultiSampleType(d, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, D3DFMT_D24S8, TRUE,
+                                                            (D3DMULTISAMPLE_TYPE)n, 0)))
+            return (D3DMULTISAMPLE_TYPE)n;
+    }
+    if (want >= 2)
+        printf("[gpu] anti-aliasing: %dx isn't available on this card: off\n", want);
+    return D3DMULTISAMPLE_NONE;
+}
+
 static float aspect_setting(void)
 {
     char v[16] = "";
@@ -168,6 +192,8 @@ int gpu_open(unsigned width, unsigned height)
     pp.EnableAutoDepthStencil = TRUE;
     pp.AutoDepthStencilFormat = D3DFMT_D24S8;
     pp.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;  /* the game paces itself (frame limiter) */
+    msaa = msaa_setting(d3d);
+    pp.MultiSampleType = msaa;
     HRESULT hr = IDirect3D9_CreateDevice(d3d, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, window,
                                          D3DCREATE_HARDWARE_VERTEXPROCESSING | D3DCREATE_FPU_PRESERVE, &pp, &device);
     if (FAILED(hr))
@@ -178,6 +204,10 @@ int gpu_open(unsigned width, unsigned height)
         return 0;
     }
     printf("[gpu] Direct3D 9 device %ux%u\n", render_width, render_height);
+    if (msaa) {
+        printf("[gpu] anti-aliasing: %dx MSAA\n", (int)msaa);
+        IDirect3DDevice9_SetRenderState(device, D3DRS_MULTISAMPLEANTIALIAS, TRUE);
+    }
     IDirect3DDevice9_SetRenderState(device, D3DRS_CULLMODE, D3DCULL_NONE);
     IDirect3DDevice9_SetRenderState(device, D3DRS_LIGHTING, FALSE);
     IDirect3DDevice9_SetRenderState(device, D3DRS_ZENABLE, D3DZB_TRUE);
@@ -677,8 +707,18 @@ void gpu_set_render_target(DWORD data, unsigned width, unsigned height, int back
     IDirect3DDevice9_SetRenderTarget(device, 0, surface);  /* also sets the viewport to the whole target */
     if (surface != back_buffer)
         IDirect3DSurface9_Release(surface);
-    /* the game keeps its 640x480 depth buffer for the small targets too, as Direct3D 9 allows */
-    IDirect3DDevice9_SetDepthStencilSurface(device, depth ? back_depth : 0);
+    /* the game keeps its 640x480 depth buffer for the small targets too, as Direct3D 9 allows. A multisampled one
+     * can't go with a single-sampled target: those get a single-sampled depth buffer of the back buffer's size. */
+    IDirect3DSurface9 *depth_surface = back_depth;
+    if (msaa && surface != back_buffer) {
+        if (!target_depth &&
+            FAILED(IDirect3DDevice9_CreateDepthStencilSurface(device, render_width, render_height, D3DFMT_D24S8,
+                                                              D3DMULTISAMPLE_NONE, 0, TRUE, &target_depth, 0)))
+            target_depth = 0;
+        depth_surface = target_depth;
+    }
+    IDirect3DDevice9_SetDepthStencilSurface(device, depth ? depth_surface : 0);
+    depth = depth && depth_surface;
     has_depth = depth;
     if (log_frame_now())
         printf("[gpu] render target %08lx %ux%u%s\n", (unsigned long)data, width, height, back ? " (back buffer)" : "");
@@ -1316,6 +1356,16 @@ static void snapshot(void)
     if (FAILED(IDirect3DDevice9_GetBackBuffer(device, 0, 0, D3DBACKBUFFER_TYPE_MONO, &back)))
         return;
     IDirect3DSurface9_GetDesc(back, &desc);
+    if (desc.MultiSampleType != D3DMULTISAMPLE_NONE) {  /* resolved into a single-sampled copy first */
+        IDirect3DSurface9 *resolved = 0;
+        if (SUCCEEDED(IDirect3DDevice9_CreateRenderTarget(device, desc.Width, desc.Height, desc.Format,
+                                                          D3DMULTISAMPLE_NONE, 0, FALSE, &resolved, 0)))
+            IDirect3DDevice9_StretchRect(device, back, 0, resolved, 0, D3DTEXF_NONE);
+        IDirect3DSurface9_Release(back);
+        if (!resolved)
+            return;
+        back = resolved;
+    }
     if (SUCCEEDED(IDirect3DDevice9_CreateOffscreenPlainSurface(device, desc.Width, desc.Height, desc.Format,
                                                                 D3DPOOL_SYSTEMMEM, &copy, 0)) &&
         SUCCEEDED(IDirect3DDevice9_GetRenderTargetData(device, back, copy))) {
