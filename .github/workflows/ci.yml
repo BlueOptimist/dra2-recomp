@@ -57,6 +57,22 @@ jobs:
           llvm-lib /out:out/lua50_float.lib $objs
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
+      # DRA 2.exe, with the drawn icon (tools/launcher/icon.ico). Your own cover icon (cover.ico) stays local.
+      - name: Build the launcher (DRA 2.exe)
+        shell: pwsh
+        run: |
+          $env:PATH = "C:\Program Files\LLVM\bin;$env:PATH"
+          New-Item -ItemType Directory -Force out/launcher | Out-Null
+          llvm-rc /FO out/play.res tools/launcher/play.rc
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          clang --target=x86_64-pc-windows-msvc -O2 -fuse-ld=lld tools/launcher/play.c out/play.res -o "out/launcher/DRA 2.exe" -luser32 "-Wl,/subsystem:windows" "-Wl,/entry:wWinMainCRTStartup"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DRA 2 launcher
+          path: out/launcher/DRA 2.exe
+
       - uses: actions/upload-artifact@v4
         with:
           name: dra2_port-win32
