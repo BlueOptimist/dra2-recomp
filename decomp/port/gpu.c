@@ -184,6 +184,9 @@ int gpu_open(unsigned width, unsigned height)
     for (DWORD s = 0; s < 4; s++) {
         IDirect3DDevice9_SetSamplerState(device, s, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
         IDirect3DDevice9_SetSamplerState(device, s, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+        /* the game sets linear mip filtering on every stage it uses (D3DTSS_MIPFILTER); textures without mipmaps
+         * (render targets, linear ones) are unaffected */
+        IDirect3DDevice9_SetSamplerState(device, s, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
     }
     return 1;
 }
@@ -422,6 +425,37 @@ static int texture_fits(const XTexture *x, unsigned bytes)
 
 int linear_format(unsigned format);  /* port/d3d8.c */
 
+/* Mipmaps: a swizzled texture holds Format's level count (bits 16-19) of levels, each half the last (down to 1), one
+ * after another with no padding; a DXT level is whole 4x4 blocks, at least one. They all go to Direct3D 9, where the
+ * game's linear mip filtering (gpu_open) picks between them: with only the top level, distant surfaces shimmered. */
+static unsigned mip_levels(const XTexture *x, unsigned w, unsigned h)
+{
+    unsigned levels = x->Size ? 1 : (x->Format >> 16) & 0xf, most = 1;
+    for (unsigned s = w > h ? w : h; s > 1; s >>= 1)
+        most++;
+    return levels < 1 ? 1 : levels > most ? most : levels;
+}
+
+static unsigned level_bytes(unsigned w, unsigned h, unsigned level, unsigned block, unsigned bpp)
+{
+    w = w >> level ? w >> level : 1, h = h >> level ? h >> level : 1;
+    return block ? ((w + 3) / 4) * ((h + 3) / 4) * block : w * h * bpp;
+}
+
+/* the levels' bytes; levels drops to what the readable memory holds (the top level is still checked by texture_fits) */
+static unsigned levels_bytes(const XTexture *x, unsigned w, unsigned h, unsigned *levels, unsigned block, unsigned bpp)
+{
+    unsigned total = 0, have = *levels > 1 ? readable_from((const void *)x->Data) : 0, l = 0;
+    for (; l < *levels; l++) {
+        unsigned next = total + level_bytes(w, h, l, block, bpp);
+        if (l && next > have)
+            break;
+        total = next;
+    }
+    *levels = l;
+    return total;
+}
+
 static void decode(CachedTexture *c, const XTexture *x)
 {
     unsigned format = (x->Format >> 8) & 0xff;
@@ -435,15 +469,16 @@ static void decode(CachedTexture *c, const XTexture *x)
         w = 1u << ((x->Format >> 20) & 0xf), h = 1u << ((x->Format >> 24) & 0xf);
     }
     c->width = w, c->height = h;
+    unsigned levels = mip_levels(x, w, h);
     const unsigned char *src = (const unsigned char *)x->Data;
     if (format == 0x0c || format == 0x0e || format == 0x0f) {  /* DXT1/3/5: the same block layout as on Windows */
         D3DFORMAT f = format == 0x0c ? D3DFMT_DXT1 : format == 0x0e ? D3DFMT_DXT3 : D3DFMT_DXT5;
         unsigned block = format == 0x0c ? 8 : 16, bw = (w + 3) / 4, bh = (h + 3) / 4;
-        if (!texture_fits(x, bw * bh * block))
-            return;
-        c->bytes = bw * bh * block;
         D3DLOCKED_RECT lr;
         if (w % 4 || h % 4) {
+            if (!texture_fits(x, bw * bh * block))
+                return;
+            c->bytes = bw * bh * block;
             /* Direct3D 9 wants DXT sizes in whole blocks; the fighters' health and evolution gauges are 2x16, so
              * those are decompressed here */
             if (FAILED(IDirect3DDevice9_CreateTexture(device, w, h, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &c->texture,
@@ -463,12 +498,20 @@ static void decode(CachedTexture *c, const XTexture *x)
             }
             return;
         }
-        if (FAILED(IDirect3DDevice9_CreateTexture(device, w, h, 1, 0, f, D3DPOOL_MANAGED, &c->texture, 0)))
+        unsigned total = levels_bytes(x, w, h, &levels, block, 0);
+        if (!texture_fits(x, total))
             return;
-        if (SUCCEEDED(IDirect3DTexture9_LockRect(c->texture, 0, &lr, 0, 0))) {
-            for (unsigned by = 0; by < bh; by++)
-                memcpy((unsigned char *)lr.pBits + by * lr.Pitch, src + by * bw * block, bw * block);
-            IDirect3DTexture9_UnlockRect(c->texture, 0);
+        c->bytes = total;
+        if (FAILED(IDirect3DDevice9_CreateTexture(device, w, h, levels, 0, f, D3DPOOL_MANAGED, &c->texture, 0)))
+            return;
+        for (unsigned l = 0; l < levels; l++) {
+            unsigned lw = w >> l ? w >> l : 1, lh = h >> l ? h >> l : 1, lbw = (lw + 3) / 4, lbh = (lh + 3) / 4;
+            if (SUCCEEDED(IDirect3DTexture9_LockRect(c->texture, l, &lr, 0, 0))) {
+                for (unsigned by = 0; by < lbh; by++)
+                    memcpy((unsigned char *)lr.pBits + by * lr.Pitch, src + by * lbw * block, lbw * block);
+                IDirect3DTexture9_UnlockRect(c->texture, l);
+            }
+            src += level_bytes(w, h, l, block, 0);
         }
         return;
     }
@@ -480,21 +523,26 @@ static void decode(CachedTexture *c, const XTexture *x)
             printf("[gpu] texture format %#x not decoded yet (%ux%u)\n", format, w, h);
         return;
     }
-    if (!texture_fits(x, c->linear ? pitch * h : w * h * (unsigned)bpp))
+    unsigned total = c->linear ? pitch * h : levels_bytes(x, w, h, &levels, 0, (unsigned)bpp);
+    if (!texture_fits(x, total))
         return;
-    if (FAILED(IDirect3DDevice9_CreateTexture(device, w, h, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &c->texture, 0)))
+    if (FAILED(IDirect3DDevice9_CreateTexture(device, w, h, levels, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &c->texture, 0)))
         return;
-    c->bytes = c->linear ? pitch * h : w * h * (unsigned)bpp;
+    c->bytes = total;
     D3DLOCKED_RECT lr;
-    if (SUCCEEDED(IDirect3DTexture9_LockRect(c->texture, 0, &lr, 0, 0))) {
-        for (unsigned y = 0; y < h; y++) {
-            DWORD *row = (DWORD *)((unsigned char *)lr.pBits + y * lr.Pitch);
-            for (unsigned xx = 0; xx < w; xx++) {
-                const unsigned char *p = c->linear ? src + y * pitch + xx * bpp : src + swizzle(xx, y, w, h) * bpp;
-                texel(format, p, &row[xx]);
+    for (unsigned l = 0; l < levels; l++) {
+        unsigned lw = w >> l ? w >> l : 1, lh = h >> l ? h >> l : 1;
+        if (SUCCEEDED(IDirect3DTexture9_LockRect(c->texture, l, &lr, 0, 0))) {
+            for (unsigned y = 0; y < lh; y++) {
+                DWORD *row = (DWORD *)((unsigned char *)lr.pBits + y * lr.Pitch);
+                for (unsigned xx = 0; xx < lw; xx++) {
+                    const unsigned char *p = c->linear ? src + y * pitch + xx * bpp : src + swizzle(xx, y, lw, lh) * bpp;
+                    texel(format, p, &row[xx]);
+                }
             }
+            IDirect3DTexture9_UnlockRect(c->texture, l);
         }
-        IDirect3DTexture9_UnlockRect(c->texture, 0);
+        src += level_bytes(w, h, l, 0, (unsigned)bpp);
     }
 }
 
