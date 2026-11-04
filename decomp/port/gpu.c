@@ -383,13 +383,13 @@ static unsigned readable_from(const void *p)
 
 static int texture_fits(const XTexture *x, unsigned bytes)
 {
-    unsigned have = readable_from(x->Data);
+    unsigned have = readable_from((const void *)x->Data);
     if (have >= bytes)
         return 1;
     static int warned;
     if (warned++ < 8)
         printf("[gpu] texture %p (format %08lx, size %08lx) needs %u bytes at %p, only %u readable: skipped\n",
-               (void *)x, (unsigned long)x->Format, (unsigned long)x->Size, bytes, x->Data, have);
+               (void *)x, (unsigned long)x->Format, (unsigned long)x->Size, bytes, (void *)x->Data, have);
     return 0;
 }
 

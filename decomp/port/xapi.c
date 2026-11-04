@@ -945,7 +945,7 @@ DWORD __stdcall XAPILIB__XInputGetState(void *handle, XBOX_STATE *out)
     if (!xinput_ready() || win_get_state(port, &st) != ERROR_SUCCESS) {
         if (port != 0)
             return ERROR_DEVICE_NOT_CONNECTED;
-        memset(&st, 0, sizeof st);  /* player 1 without a controller: the keyboard alone */
+        __builtin_memset(&st, 0, sizeof st);  /* player 1 without a controller: the keyboard alone */
     }
     if (port == 0)
         keyboard_pad(&st), script_pad(&st);
