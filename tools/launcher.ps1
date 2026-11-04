@@ -381,7 +381,7 @@ function Save-Settings { $settings | ConvertTo-Json | Set-Content $settingsFile 
           <TextBlock Text="Player 1 uses the keyboard and the first controller together; players 2-4 use controllers (any XInput pad)." Style="{StaticResource Sub}"/>
           <StackPanel Orientation="Horizontal">
             <StackPanel Width="450">
-              <DockPanel Width="420" HorizontalAlignment="Left">
+              <DockPanel Width="390" HorizontalAlignment="Left">
                 <Button x:Name="resetKeys" DockPanel.Dock="Right" Style="{StaticResource Slot}" Content="Reset" Height="22" VerticalAlignment="Bottom"/>
                 <TextBlock Text="KEYBOARD" Style="{StaticResource Label}"/>
               </DockPanel>
@@ -574,12 +574,13 @@ foreach ($key in $resolutions.Keys) {
 }
 
 # controls: rebinding the keyboard (DRA2_KEYS) and the controller's buttons (DRA2_PAD), as port/xapi.c reads them.
-# The game's controls by name, with their labels and default keys (hex virtual-key codes, + between two keys)
+# The game's controls by name, with their labels and default keys (hex virtual-key codes). White and Black are the
+# original Xbox controller's two extra buttons, which XInput pads don't have (LB and RB stand in for them).
 $controlList = @(
     @('up', 'Up  (move, d-pad)', '26'), @('down', 'Down', '28'), @('left', 'Left', '25'), @('right', 'Right', '27'),
     @('a', 'A  (jump)', '5a'), @('b', 'B  (grab / throw)', '58'), @('x', 'X  (special attack)', '43'), @('y', 'Y', '56'),
-    @('white', 'White', '45'), @('black', 'Black', '52'), @('lt', 'Left trigger', '51'), @('rt', 'Right trigger', '57'),
-    @('start', 'Start  (pause)', '0d'), @('back', 'Back', '1b+08'),
+    @('white', 'White  (extra Xbox button)', '45'), @('black', 'Black  (extra Xbox button)', '52'),
+    @('lt', 'Left trigger', '51'), @('rt', 'Right trigger', '57'), @('start', 'Start  (pause)', '0d'), @('back', 'Back', '1b'),
     @('rup', 'Right stick up', '49'), @('rdown', 'Right stick down', '4b'), @('rleft', 'Right stick left', '4a'),
     @('rright', 'Right stick right', '4c'))
 # the controller: which button sets each of the game's buttons
@@ -588,7 +589,7 @@ $padLabels = @{ a = 'A'; b = 'B'; x = 'X'; y = 'Y'; lb = 'LB'; rb = 'RB'; lt = '
                 ls = 'Left stick click'; rs = 'Right stick click' }
 $padList = @(
     @('a', 'A  (jump)', 'a'), @('b', 'B  (grab / throw)', 'b'), @('x', 'X  (special attack)', 'x'), @('y', 'Y', 'y'),
-    @('white', 'White', 'lb'), @('black', 'Black', 'rb'), @('lt', 'Left trigger', 'lt'), @('rt', 'Right trigger', 'rt'),
+    @('white', 'White  (extra Xbox button)', 'lb'), @('black', 'Black  (extra Xbox button)', 'rb'), @('lt', 'Left trigger', 'lt'), @('rt', 'Right trigger', 'rt'),
     @('start', 'Start  (pause)', 'start'), @('back', 'Back', 'back'))
 
 function Read-Bindings([string]$text) {
@@ -610,18 +611,19 @@ function Reset-PadMap { foreach ($p in $padList) { $padMap[$p[0]] = $p[2] } }
 Reset-KeyMap; Reset-PadMap
 try {
     $saved = Read-Bindings $settings.keys
-    foreach ($n in $saved.Keys) { if ($keyMap.Contains($n)) { $keyMap[$n] = Read-Keys $saved[$n] } }
+    foreach ($n in $saved.Keys) { if ($keyMap.Contains($n)) { $keyMap[$n] = Read-Keys $saved[$n]; $keyMap[$n][1] = 0 } }  # one key each
     $saved = Read-Bindings $settings.pad
     foreach ($n in $saved.Keys) { if ($padMap.Contains($n) -and $padChoices -contains $saved[$n]) { $padMap[$n] = $saved[$n] } }
 } catch { Reset-KeyMap; Reset-PadMap }
 
-function Save-Keys {
-    $settings.keys = (@($keyMap.Keys) | ForEach-Object {
+function Keys-Text {
+    (@($keyMap.Keys) | ForEach-Object {
         $name = $_
         "$name=" + ((@($keyMap[$name]) | Where-Object { $_ } | ForEach-Object { '{0:x2}' -f $_ }) -join '+')
     }) -join ','
-    Save-Settings
 }
+# the game always gets the whole map, so it uses exactly the keys shown (its own defaults add Backspace for Back)
+function Save-Keys { $settings.keys = Keys-Text; Save-Settings }
 function Save-Pad { $settings.pad = (@($padMap.Keys) | ForEach-Object { "$_=$($padMap[$_])" }) -join ','; Save-Settings }
 
 function Key-Name([int]$vk) {
@@ -653,14 +655,14 @@ function Add-Slot($grid, [int]$row, [int]$column, [string]$id) {
     $b
 }
 
-# keyboard: two keys per control; click one, then press the new key (right-click clears it)
+# keyboard: one key per control; click it, then press the new key (right-click clears it)
 $keySlots = @()
-foreach ($w in 165, 125, 125) {
+foreach ($w in 240, 150) {
     $ui.keyTable.ColumnDefinitions.Add((New-Object Windows.Controls.ColumnDefinition -Property @{ Width = (New-Object Windows.GridLength $w) }))
 }
 foreach ($c in $controlList) {
     $row = Add-Row $ui.keyTable $c[1]
-    for ($slot = 0; $slot -lt 2; $slot++) {
+    for ($slot = 0; $slot -lt 1; $slot++) {
         $b = Add-Slot $ui.keyTable $row ($slot + 1) "$($c[0])|$slot"
         $b.Add_Click({ param($s) Start-Capture $s })
         $b.Add_MouseRightButtonUp({ param($s, $e) $e.Handled = $true; $script:capture = $null; Set-Key $s 0 })
@@ -705,7 +707,7 @@ Show-Keys
 
 # controller: click a button to pick the next choice, right-click for the previous
 $padSlots = @()
-foreach ($w in 165, 150) {
+foreach ($w in 190, 150) {
     $ui.padTable.ColumnDefinitions.Add((New-Object Windows.Controls.ColumnDefinition -Property @{ Width = (New-Object Windows.GridLength $w) }))
 }
 foreach ($p in $padList) {
@@ -835,7 +837,7 @@ function Start-Game {
     if (-not $settings.soft) { $env:DRA2_SOFT = '0' }
     if ($settings.aspect -ne '4:3') { $env:DRA2_ASPECT = $settings.aspect }
     $env:DRA2_RESOLUTION = [string]$settings.resolution
-    if ($settings.keys) { $env:DRA2_KEYS = [string]$settings.keys }
+    $env:DRA2_KEYS = Keys-Text
     if ($settings.pad) { $env:DRA2_PAD = [string]$settings.pad }
     if (-not $settings.sound) { $env:DRA2_MUTE = '1' }
     if ($settings.quickIntro) { $env:DRA2_QUICKINTRO = '1' }

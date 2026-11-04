@@ -17,7 +17,7 @@ Double-click **`DRA 2.exe`** to open the launcher (`tools/launcher.ps1`, a WPF w
 - **Display:** a 1×–4× window or fullscreen (Alt+Enter or F11 switches in game). The resolution is 1080p by default, or 480p (the Xbox's), 720p, 1440p or 4K. The picture shape is 4:3 as on the Xbox, or 16:10, 16:9 or 21:9, which show more of each scene at the sides without stretching it. There's also the Xbox's soft display, on by default.
 - **Quick start** (on the Home page, on by default): the copyright screen shows for a second instead of five, and the Bandai and Black Ship logos are skipped, so the title comes up about 14 seconds sooner. The game's own loading is already quick (an arena loads in about 0.2 s); the rest of the wait is screens that run for a set time. The game tips screen before a fight stays up to 10 seconds, and A skips it, as on the Xbox.
 - **Audio:** sound on or off, and recording to `logs/sound.wav`.
-- **Controls:** rebind the keyboard (two keys per control) and the controller's buttons.
+- **Controls:** rebind the keyboard (one key per control) and the controller's buttons. White and Black are the original Xbox controller's two extra buttons; on an XInput pad they're LB and RB unless you move them.
 - **Saves:** the saves folder, with backups to `save_backups/`.
 - **Advanced:** the game data folder, extracting the disc image, rebuilding the game and opening the last log.
 
