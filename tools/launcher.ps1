@@ -25,6 +25,7 @@ $backups = Join-Path $root 'save_backups'
 # ------------------------------------------------------------------------------------------------- settings --
 $settings = [ordered]@{
     display = '2'                                 # 1..4 (window scale) or fullscreen
+    aspect = '4:3'                                # the picture's shape (DRA2_ASPECT): 4:3, 16:10, 16:9 or 21:9
     soft = $true                                  # the Xbox's soft display (DRA2_SOFT)
     sound = $true
     record = $false
@@ -314,9 +315,13 @@ function Save-Settings { $settings | ConvertTo-Json | Set-Content $settingsFile 
         <!-- DISPLAY -->
         <StackPanel x:Name="pageDisplay" Visibility="Collapsed">
           <TextBlock Text="DISPLAY" Style="{StaticResource Heading}"/>
-          <TextBlock Text="The game draws at 640 × 480 and is scaled to the window, keeping its 4:3 shape." Style="{StaticResource Sub}"/>
+          <TextBlock Text="The game draws at 480 lines and is scaled to the window, keeping the shape you pick below." Style="{StaticResource Sub}"/>
           <TextBlock Text="DISPLAY MODE" Style="{StaticResource Label}"/>
           <WrapPanel x:Name="displayModes"/>
+          <TextBlock Text="PICTURE SHAPE" Style="{StaticResource Label}"/>
+          <WrapPanel x:Name="aspectModes"/>
+          <TextBlock Style="{StaticResource Sub}" Margin="0,4,0,0"
+                     Text="Wider shapes show more of each scene at the sides. Nothing is stretched: the HUD and menus keep their shape in the middle."/>
           <TextBlock Text="PICTURE" Style="{StaticResource Label}"/>
           <CheckBox x:Name="displaySoft" Style="{StaticResource Switch}" Content="Soft display, like the Xbox's video output"/>
           <TextBlock Style="{StaticResource Sub}" Margin="0,4,0,0"
@@ -484,7 +489,7 @@ function Update-Overview {
 }
 
 # display mode chips, on Home and on Display, kept in step
-$modes = [ordered]@{ '1' = 'Window 1×  (640×480)'; '2' = 'Window 2×  (1280×960)'; '3' = 'Window 3×'; '4' = 'Window 4×'; 'fullscreen' = 'Fullscreen' }
+$modes = [ordered]@{ '1' = 'Window 1×'; '2' = 'Window 2×'; '3' = 'Window 3×'; '4' = 'Window 4×'; 'fullscreen' = 'Fullscreen' }
 $chips = @()
 foreach ($panel in 'quickDisplay', 'displayModes') {
     foreach ($key in $modes.Keys) {
@@ -500,6 +505,16 @@ foreach ($panel in 'quickDisplay', 'displayModes') {
         $ui[$panel].Children.Add($chip) | Out-Null
         $chips += $chip
     }
+}
+
+# picture shape: the game's 4:3, or wider (DRA2_ASPECT): more of the scene at the sides, nothing stretched
+$aspects = [ordered]@{ '4:3' = '4:3  (original)'; '16:10' = '16:10'; '16:9' = '16:9'; '21:9' = '21:9' }
+foreach ($key in $aspects.Keys) {
+    $chip = New-Object Windows.Controls.RadioButton -Property @{ Content = $aspects[$key]; Tag = $key; GroupName = 'aspect' }
+    $chip.Style = $window.FindResource('Chip')
+    $chip.IsChecked = ($settings.aspect -eq $key)
+    $chip.Add_Checked({ param($s) $settings.aspect = [string]$s.Tag; Save-Settings })
+    $ui.aspectModes.Children.Add($chip) | Out-Null
 }
 
 # keyboard table
@@ -617,13 +632,14 @@ function Start-Game {
     if (-not (Test-Path $exe)) { Set-Status 'The game isn''t built yet.' 'Advanced → Rebuild the game.'; return }
     New-Item -ItemType Directory -Force $settings.savesPath, $logs | Out-Null
     foreach ($name in 'DRA2_INPUT', 'DRA2_ARENA', 'DRA2_SNAPSHOT', 'DRA2_LOGFRAME', 'DRA2_LOGDRAW', 'DRA2_SAMPLE',
-                      'DRA2_MUTE', 'DRA2_SOUNDDUMP', 'DRA2_LOGSOUND', 'DRA2_WINDOW', 'DRA2_SOFT') {
+                      'DRA2_MUTE', 'DRA2_SOUNDDUMP', 'DRA2_LOGSOUND', 'DRA2_WINDOW', 'DRA2_SOFT', 'DRA2_ASPECT') {
         [Environment]::SetEnvironmentVariable($name, $null, 'Process')
     }
     $env:DRA2_DATA = $settings.dataPath
     $env:DRA2_SAVES = $settings.savesPath
     $env:DRA2_WINDOW = $settings.display
     if (-not $settings.soft) { $env:DRA2_SOFT = '0' }
+    if ($settings.aspect -ne '4:3') { $env:DRA2_ASPECT = $settings.aspect }
     if (-not $settings.sound) { $env:DRA2_MUTE = '1' }
     if ($settings.record) { $env:DRA2_SOUNDDUMP = Join-Path $logs 'sound.wav' }
     $script:gameLog = Join-Path $logs 'last_run.txt'

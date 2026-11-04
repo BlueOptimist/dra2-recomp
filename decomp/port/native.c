@@ -431,6 +431,31 @@ static long WINAPI float_exception(void *pointers)
     return 0;  /* EXCEPTION_CONTINUE_SEARCH */
 }
 
+/* Widescreen (DRA2_ASPECT, port/gpu.c): the cameras (0x90bb5 in the fights, 0xd5f6c in the menus' scenes) build
+ * their projection with 0x1a3910(left, right, bottom, top, near, far), which also makes the culling planes, from a
+ * horizontal field of view. Widening left and right by gpu_wide shows more at the sides, at the same height, and
+ * keeps what's there from being culled. */
+extern float gpu_wide;
+typedef void (__cdecl *projection_fn)(float, float, float, float, float, float);
+
+static void __cdecl wide_projection(float left, float right, float bottom, float top, float near_z, float far_z)
+{
+    ((projection_fn)0x1a3910)(left * gpu_wide, right * gpu_wide, bottom, top, near_z, far_z);
+}
+
+static void patch_projection_calls(void)
+{
+    static const unsigned calls[] = { 0x90bb5, 0xd5f6c };
+    for (unsigned i = 0; i < sizeof calls / sizeof calls[0]; i++) {
+        unsigned char *at = (unsigned char *)calls[i];
+        if (at[0] != 0xe8 || calls[i] + 5 + *(int *)(at + 1) != 0x1a3910) {
+            printf("[native] projection call at %#x isn't as expected: no widescreen there\n", calls[i]);
+            continue;
+        }
+        *(int *)(at + 1) = (int)((unsigned)wide_projection - (calls[i] + 5));
+    }
+}
+
 __declspec(dllexport) void native_main(void)
 {
     setvbuf(__acrt_iob_func(1), 0, 4 /* _IONBF */, 0);
@@ -478,6 +503,7 @@ __declspec(dllexport) void native_main(void)
     };
     if (((unsigned char *)0x1691af)[0] == 0xff && ((unsigned char *)0x1691b2)[0] == 0xc6)
         memcpy((void *)0x169196, stream_read, sizeof stream_read);
+    patch_projection_calls();
     /* what the Xbox startup thread (0x126fac) runs before main: process setup (heaps), the runtime's _rtinit and
      * _cinit (which runs the startup tables, C initializers first) */
     for (unsigned k = 0; k < sizeof startup / sizeof startup[0]; k++) {

@@ -468,7 +468,10 @@ static void draw_up(int primitive, unsigned count, const unsigned short *indices
                 printf(" %08x", w[i]);
             printf("\n");
         }
+        extern int gpu_draw_2d;
+        gpu_draw_2d = 1;  /* screen coordinates: kept in shape with DRA2_ASPECT (port/gpu.c) */
         gpu_draw(primitive, up_vertices, count);
+        gpu_draw_2d = 0;
         return;
     }
     streams[0].data = data, streams[0].stride = stride;

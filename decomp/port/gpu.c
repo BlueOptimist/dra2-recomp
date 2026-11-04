@@ -28,6 +28,39 @@ static int in_scene;
 static int fullscreen;
 static WINDOWPLACEMENT windowed_placement = { sizeof(WINDOWPLACEMENT) };
 
+/* Widescreen: DRA2_ASPECT=16:9 (or 16:10, 21:9...; 4:3 is the game's own) draws a wider picture, not a stretched one.
+ * The native build widens the game's camera projections and their culling by gpu_wide (port/native.c), so the game
+ * squeezes a wider view into its 640-pixel viewport. Here, 3D drawing is spread over the wider back buffer, and 2D
+ * drawing (screen coordinates: HUD, menus, text) keeps its shape in the middle, except what spans the whole width
+ * (fades, backgrounds), which is stretched to the edges. */
+float gpu_wide = 1.0f;          /* the width over the game's: (aspect) / (4/3) */
+int gpu_draw_2d;                /* set by port/d3d8.c around draws in screen coordinates */
+static unsigned game_width = 640, buffer_width = 640, buffer_height = 480;
+static IDirect3DTexture9 *drawing_into;  /* the target texture being drawn into, if not the back buffer */
+
+static float aspect_setting(void)
+{
+    char v[16] = "";
+    GetEnvironmentVariableA("DRA2_ASPECT", v, sizeof v);
+    float w = 0, h = 0;
+    char *colon = strchr(v, ':');
+    if (colon) {
+        *colon = 0;
+        w = (float)atof(v), h = (float)atof(colon + 1);
+    }
+    float wide = w > 0 && h > 0 ? (w / h) / (4.0f / 3.0f) : 1.0f;
+    return wide < 1.0f ? 1.0f : wide > 2.5f ? 2.5f : wide;
+}
+
+/* the x a game x maps to on the back buffer; full: the draw spans the game's whole width */
+static float wide_x(float x, int two_d, int full)
+{
+    float middle = game_width * 0.5f, centre = buffer_width * 0.5f;
+    if (!two_d || full)  /* spread: 3D was squeezed by the wider projection; full-width 2D is stretched */
+        return centre + (x - middle) * ((float)buffer_width / (float)game_width);
+    return x + (centre - middle);  /* moved to the middle, its shape kept */
+}
+
 static void set_fullscreen(int on)
 {
     if (on == fullscreen)
@@ -81,6 +114,13 @@ int gpu_open(unsigned width, unsigned height)
     wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
     wc.lpszClassName = "DRA2Window";
     RegisterClassA(&wc);
+    gpu_wide = aspect_setting();
+    game_width = width;
+    buffer_width = ((unsigned)((float)width * gpu_wide + 1.0f)) & ~1u;  /* 640 * 4/3 = 853.3 -> 854 */
+    buffer_height = height;
+    if (gpu_wide > 1.0f)
+        printf("[gpu] widescreen: %ux%u, the game's %u wide in the middle\n", buffer_width, height, width);
+    width = buffer_width;
     RECT r = { 0, 0, (LONG)width * scale, (LONG)height * scale };
     AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
     window = CreateWindowExA(0, wc.lpszClassName, "Digimon Rumble Arena 2", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
@@ -162,6 +202,16 @@ void gpu_clear(int count, const long *rects, unsigned flags, unsigned color, flo
     if (log_frame_now())
         printf("[gpu] clear flags %x colour %08x z %g (%d rects)\n", flags, color, z, rects ? count : 0);
     begin_scene();
+    D3DRECT wide_rects[8];
+    if (rects && !drawing_into && buffer_width != game_width && count > 0 && count <= 8) {
+        for (int i = 0; i < count; i++) {  /* on the back buffer, as 2D drawing is */
+            const long *q = rects + 4 * i;
+            int full = q[0] <= 0 && q[2] >= (long)game_width;
+            wide_rects[i].x1 = (LONG)wide_x((float)q[0], 1, full), wide_rects[i].y1 = q[1];
+            wide_rects[i].x2 = (LONG)wide_x((float)q[2], 1, full), wide_rects[i].y2 = q[3];
+        }
+        rects = (const long *)wide_rects;
+    }
     IDirect3DDevice9_Clear(device, rects ? (DWORD)count : 0, (const D3DRECT *)(rects ? rects : 0), d9, color, z,
                            stencil);
 }
@@ -519,8 +569,6 @@ static void dump_texture(IDirect3DTexture9 *t, const void *xbox)
 static struct { DWORD data; unsigned width, height; IDirect3DTexture9 *texture; } targets[16];
 static int target_count;
 static IDirect3DSurface9 *back_buffer, *back_depth;
-static IDirect3DTexture9 *drawing_into;  /* the target texture being drawn into, if not the back buffer */
-
 void gpu_set_render_target(DWORD data, unsigned width, unsigned height, int back, int depth)
 {
     if (!device)
@@ -1008,7 +1056,16 @@ void gpu_draw(int primitive, const GpuVertex *v, unsigned count)
     unsigned n = 0;
     D3DPRIMITIVETYPE type;
     unsigned prims;
-    #define PUT(i) do { scratch[n] = v[i]; scratch[n].x -= 0.5f, scratch[n].y -= 0.5f; n++; } while (0)
+    /* widescreen, on the back buffer: 3D spread over the width, 2D in the middle unless it spans the whole width */
+    int wide = !drawing_into && buffer_width != game_width, full = 0;
+    if (wide && gpu_draw_2d) {
+        float lo = v[0].x, hi = v[0].x;
+        for (unsigned i = 1; i < count; i++)
+            lo = v[i].x < lo ? v[i].x : lo, hi = v[i].x > hi ? v[i].x : hi;
+        full = lo <= 1.0f && hi >= (float)game_width - 1.0f;
+    }
+    #define PUT(i) do { scratch[n] = v[i]; if (wide) scratch[n].x = wide_x(scratch[n].x, gpu_draw_2d, full); \
+                        scratch[n].x -= 0.5f, scratch[n].y -= 0.5f; n++; } while (0)
     switch (primitive) {
     case 1: type = D3DPT_POINTLIST; for (unsigned i = 0; i < count; i++) PUT(i); prims = n; break;
     case 2: type = D3DPT_LINELIST; for (unsigned i = 0; i < count; i++) PUT(i); prims = n / 2; break;
@@ -1284,14 +1341,14 @@ void gpu_present(void)
         }
         soft_display();
         snapshot();
-        /* the largest 4:3 rectangle in the middle of the window */
+        /* the largest rectangle of the picture's shape (4:3, or wider with DRA2_ASPECT) in the middle of the window */
         RECT client, picture;
         GetClientRect(window, &client);
         LONG w = client.right, h = client.bottom;
-        if (w * 3 > h * 4)
-            w = h * 4 / 3;
+        if (w * (LONG)buffer_height > h * (LONG)buffer_width)
+            w = h * (LONG)buffer_width / (LONG)buffer_height;
         else
-            h = w * 3 / 4;
+            h = w * (LONG)buffer_height / (LONG)buffer_width;
         picture.left = (client.right - w) / 2;
         picture.top = (client.bottom - h) / 2;
         picture.right = picture.left + w;

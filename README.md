@@ -14,7 +14,7 @@ To work on it you need your own copy of the game:
 
 Double-click **`DRA 2.exe`** to open the launcher (`tools/launcher.ps1`, a WPF window). `DRA 2.exe` is built into this folder by `tools/launcher/build.ps1` from `tools/launcher/play.c`. It isn't in the repository, so `Play.cmd` does the same until it's built. Its icon is drawn by `tools/launcher/make_icon.ps1`. To use a picture of your own instead, such as the game's cover, run `make_icon.ps1 -Image <picture>` and then `build.ps1`. That writes `tools/launcher/cover.ico`, which stays out of the repository and is also used for the launcher window. The launcher has six pages and a PLAY button:
 - **Home:** whether the game data, the build and saves are ready, plus quick settings.
-- **Display:** a 1×–4× window or fullscreen. Alt+Enter or F11 switches in game.
+- **Display:** a 1×–4× window or fullscreen (Alt+Enter or F11 switches in game). The picture shape is 4:3 as on the Xbox, or 16:10, 16:9 or 21:9, which show more of each scene at the sides without stretching it. There's also the Xbox's soft display, on by default.
 - **Audio:** sound on or off, and recording to `logs/sound.wav`.
 - **Controls:** the keyboard map.
 - **Saves:** the saves folder, with backups to `save_backups/`.
