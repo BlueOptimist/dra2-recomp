@@ -63,7 +63,8 @@ function Start-Game([switch]$Mute, [switch]$Record) {
     $log = Join-Path $logs 'last_run.txt'
     Write-Host '  Starting the game. Close its window to come back here.'
     $started = Get-Date
-    $p = Start-Process $exe -PassThru -WorkingDirectory $logs -RedirectStandardOutput $log `
+    # -NoNewWindow: no second console window for the game (a console program); its output goes to the log
+    $p = Start-Process $exe -PassThru -NoNewWindow -WorkingDirectory $logs -RedirectStandardOutput $log `
         -RedirectStandardError (Join-Path $logs 'last_run_errors.txt')
     $null = $p.Handle  # keeps the handle, so the exit code can be read once it has exited
     $p.WaitForExit()

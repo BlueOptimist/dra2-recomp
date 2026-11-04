@@ -602,7 +602,9 @@ function Start-Game {
     if (-not $settings.sound) { $env:DRA2_MUTE = '1' }
     if ($settings.record) { $env:DRA2_SOUNDDUMP = Join-Path $logs 'sound.wav' }
     $script:gameLog = Join-Path $logs 'last_run.txt'
-    $script:game = Start-Process $exe -PassThru -WorkingDirectory $logs -RedirectStandardOutput $script:gameLog `
+    # -NoNewWindow: the game is a console program, and would otherwise get a console window of its own. It shares the
+    # launcher's hidden one instead; its output goes to the log either way.
+    $script:game = Start-Process $exe -PassThru -NoNewWindow -WorkingDirectory $logs -RedirectStandardOutput $script:gameLog `
         -RedirectStandardError (Join-Path $logs 'last_run_errors.txt')
     $null = $script:game.Handle
     $script:started = Get-Date
