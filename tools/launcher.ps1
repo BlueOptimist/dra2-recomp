@@ -334,8 +334,6 @@ function Save-Settings { $settings | ConvertTo-Json | Set-Content $settingsFile 
           </UniformGrid>
           <TextBlock Text="QUICK SETTINGS" Style="{StaticResource Label}" Margin="0,26,0,10"/>
           <WrapPanel x:Name="quickDisplay"/>
-          <CheckBox x:Name="quickSound" Style="{StaticResource Switch}" Content="Sound" Margin="0,6,0,0"/>
-          <CheckBox x:Name="quickIntro" Style="{StaticResource Switch}" Content="Quick start: skip the studio logos and wait less at the copyright screen" Margin="0,6,0,0"/>
         </StackPanel>
 
         <!-- DISPLAY -->
@@ -428,6 +426,8 @@ function Save-Settings { $settings | ConvertTo-Json | Set-Content $settingsFile 
           </DockPanel>
           <TextBlock Text="LAUNCHER" Style="{StaticResource Label}"/>
           <CheckBox x:Name="hideWhilePlaying" Style="{StaticResource Switch}" Content="Minimise the launcher while the game runs"/>
+          <TextBlock Text="STARTUP" Style="{StaticResource Label}"/>
+          <CheckBox x:Name="quickIntro" Style="{StaticResource Switch}" Content="Quick start: skip the studio logos and wait less at the copyright screen"/>
           <TextBlock Text="TOOLS" Style="{StaticResource Label}"/>
           <WrapPanel>
             <Button x:Name="rebuild" Style="{StaticResource Btn}" Content="Rebuild the game"/>
@@ -738,7 +738,6 @@ foreach ($p in $pages) {
 }
 
 # ------------------------------------------------------------------------------------------------ settings --
-$ui.quickSound.IsChecked = $settings.sound
 $ui.quickIntro.IsChecked = $settings.quickIntro
 $ui.quickIntro.Add_Checked({ $settings.quickIntro = $true; Save-Settings })
 $ui.quickIntro.Add_Unchecked({ $settings.quickIntro = $false; Save-Settings })
@@ -749,13 +748,7 @@ $ui.displaySoft.IsChecked = $settings.soft
 $ui.displaySoft.Add_Click({ $settings.soft = [bool]$ui.displaySoft.IsChecked; Save-Settings })
 $ui.savesPath.Text = $settings.savesPath
 $ui.dataPath.Text = $settings.dataPath
-foreach ($box in 'quickSound', 'audioSound') {
-    $ui[$box].Add_Click({
-        param($s)
-        $settings.sound = [bool]$s.IsChecked; Save-Settings
-        $ui.quickSound.IsChecked = $settings.sound; $ui.audioSound.IsChecked = $settings.sound
-    })
-}
+$ui.audioSound.Add_Click({ $settings.sound = [bool]$ui.audioSound.IsChecked; Save-Settings })
 $ui.audioRecord.Add_Click({ $settings.record = [bool]$ui.audioRecord.IsChecked; Save-Settings })
 $ui.hideWhilePlaying.Add_Click({ $settings.hideWhilePlaying = [bool]$ui.hideWhilePlaying.IsChecked; Save-Settings })
 $ui.savesPath.Add_LostFocus({ $settings.savesPath = $ui.savesPath.Text.Trim(); Save-Settings })
