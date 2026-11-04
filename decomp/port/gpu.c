@@ -1205,11 +1205,35 @@ static unsigned clip_triangles(D3DPRIMITIVETYPE type, unsigned *n)
     return out / 3;
 }
 
+/* Texture addressing (wrap, mirror, clamp, border). The game sets it with SetTextureStageState, which only records it
+ * in the Xbox D3D's per-stage state table (D3D__TextureState, 0x238560: 32 words a stage, ADDRESSU/V/W first,
+ * BORDERCOLOR at 29); the library's draw-time code that would send it to the GPU doesn't run here. Without it every
+ * texture wraps, and a shadow projected onto the ground repeats across it. The Xbox values are Direct3D 9's
+ * (1 wrap, 2 mirror, 3 clamp, 4 border), plus 5 (clamp to edge), which is Direct3D 9's clamp. */
+static void set_addressing(void)
+{
+    static DWORD current[4][4];
+    const DWORD *state = (const DWORD *)0x238560;
+    for (DWORD s = 0; s < 4; s++, state += 32) {
+        DWORD want[4] = { state[0], state[1], state[2], state[29] };
+        for (int k = 0; k < 3; k++)
+            want[k] = want[k] == 5 ? D3DTADDRESS_CLAMP : want[k] >= 1 && want[k] <= 4 ? want[k] : D3DTADDRESS_WRAP;
+        static const D3DSAMPLERSTATETYPE which[4] = { D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_ADDRESSW,
+                                                      D3DSAMP_BORDERCOLOR };
+        for (int k = 0; k < 4; k++)
+            if (current[s][k] != want[k] + 1) {
+                current[s][k] = want[k] + 1;
+                IDirect3DDevice9_SetSamplerState(device, s, which[k], want[k]);
+            }
+    }
+}
+
 void gpu_draw(int primitive, const GpuVertex *v, unsigned count)
 {
     if (!device || !count)
         return;
     begin_scene();
+    set_addressing();
     /* Xbox pixel centres are at .5; linear textures are addressed in texels */
     unsigned n = 0;
     D3DPRIMITIVETYPE type;

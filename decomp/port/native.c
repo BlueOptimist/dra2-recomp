@@ -298,7 +298,11 @@ static unsigned long slot_tls_array, slot_prcb, slot_thread, slot_zero;
 
 struct native_thread {
     void *tls_array[1];          /* fs:[4]: [TLS index] = this thread's TLS block */
-    void *prcb[4];               /* fs:[0x20]: the processor block, CurrentThread first (fs:[0x28] is the same) */
+    /* fs:[0x20]: the processor block, CurrentThread first (fs:[0x28] is the same). The startup code at 0x128e99 reads
+     * its +0x250 and, when that's 0, goes on to read the kernel's own image header at 0x80010000, which doesn't exist
+     * here. It must be non-zero, and the block must reach that far: with 16 bytes, that read landed past the
+     * allocation, and the game started or crashed depending on what the heap held there. */
+    void *prcb[0x260 / 4];
     unsigned char thread[0x100]; /* fs:[0x28]: the thread object; +0x28 is its TLS data */
     unsigned char tls_block[TLS_BLOCK_SIZE];
 };
@@ -308,6 +312,7 @@ static void setup_thread(void)
     struct native_thread *t = calloc(1, sizeof *t);
     t->tls_array[0] = t->tls_block;
     t->prcb[0] = t->thread;
+    t->prcb[0x250 / 4] = (void *)1;
     *(void **)(t->thread + 0x28) = t->tls_block;
     TlsSetValue(slot_tls_array, t->tls_array);
     TlsSetValue(slot_prcb, t->prcb);
