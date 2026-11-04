@@ -6,6 +6,8 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+  release:
+    types: [published]
 
 jobs:
   check:
@@ -65,7 +67,7 @@ jobs:
           New-Item -ItemType Directory -Force out/launcher | Out-Null
           llvm-rc /FO out/play.res tools/launcher/play.rc
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          clang --target=x86_64-pc-windows-msvc -O2 -fuse-ld=lld tools/launcher/play.c out/play.res -o "out/launcher/DRA 2.exe" -luser32 "-Wl,/subsystem:windows" "-Wl,/entry:wWinMainCRTStartup"
+          clang --target=x86_64-pc-windows-msvc -O2 -fuse-ld=lld tools/launcher/play.c out/play.res -o "out/launcher/DRA 2.exe" -luser32 -lshell32 "-Wl,/subsystem:windows" "-Wl,/entry:wWinMainCRTStartup"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
       - uses: actions/upload-artifact@v4
@@ -79,3 +81,66 @@ jobs:
           path: |
             out/dra2_port.lib
             out/lua50_float.lib
+
+  # The ready-to-play Windows ZIP: the repository plus the built port (decomp/build/dra2_native.exe and .dll) and
+  # DRA 2.exe, so players need neither Python nor llvm-mingw. Built here without any game data: the port is our own
+  # code, and the game's code is loaded from the player's own disc at run time (gen_native.py takes the few addresses
+  # it needs from analysis/native_symbols.tsv). On a published release, the ZIP and its SHA-256 are attached to it.
+  package:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Get llvm-mingw 20261006 (checksum checked)
+        shell: pwsh
+        run: |
+          $zip = "$env:RUNNER_TEMP\llvm-mingw.zip"
+          Invoke-WebRequest https://github.com/mstorsjo/llvm-mingw/releases/download/20261006/llvm-mingw-20261006-ucrt-x86_64.zip -OutFile $zip
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne '317492c456aa27ee607a5919f1d2d38dcdc1112516a24d0bf4b00d078f52d17a') { "checksum mismatch: $hash"; exit 1 }
+          Expand-Archive $zip $env:RUNNER_TEMP
+          "DRA2_MINGW=$env:RUNNER_TEMP\llvm-mingw-20261006-ucrt-x86_64" >> $env:GITHUB_ENV
+
+      - name: Build the port and DRA 2.exe
+        shell: pwsh
+        run: |
+          if (Test-Path extracted) { 'game data in the checkout'; exit 1 }
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools/build_native.ps1
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools/launcher/build.ps1
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Make the ZIP
+        shell: pwsh
+        run: |
+          $name = if ($env:GITHUB_EVENT_NAME -eq 'release') { "dra2-recomp-windows-$env:GITHUB_REF_NAME" } else { 'dra2-recomp-windows' }
+          $stage = "$env:RUNNER_TEMP\$name"
+          git archive --format=zip -o "$env:RUNNER_TEMP\source.zip" --prefix="$name/" HEAD
+          Expand-Archive "$env:RUNNER_TEMP\source.zip" $env:RUNNER_TEMP
+          New-Item -ItemType Directory -Force "$stage/decomp/build" | Out-Null
+          Copy-Item decomp/build/dra2_native.exe, decomp/build/dra2_native.dll "$stage/decomp/build/"
+          Copy-Item 'DRA 2.exe' "$stage/"
+          New-Item -ItemType Directory -Force out | Out-Null
+          Compress-Archive "$stage" "out/$name.zip"
+          $hash = (Get-FileHash "out/$name.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $name.zip" | Set-Content -Encoding ascii "out/$name.zip.sha256"
+          "ZIP=out/$name.zip" >> $env:GITHUB_ENV
+          Get-Item "out/$name.zip" | Select-Object Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dra2-recomp-windows
+          path: out/dra2-recomp-windows*
+
+      - name: Attach to the release
+        if: github.event_name == 'release'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload $env:GITHUB_REF_NAME $env:ZIP "$env:ZIP.sha256" --clobber

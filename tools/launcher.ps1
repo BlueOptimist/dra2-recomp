@@ -789,13 +789,13 @@ $ui.openRepo.Add_Click({ Open-Path $root })
 
 # -------------------------------------------------------------------------------------- background tools --
 $script:tool = $null
-function Start-Tool([string]$title, [string[]]$arguments) {
+function Start-Tool([string]$title, [string[]]$arguments, [string]$program = 'powershell') {
     if ($script:tool -or $script:game) { return }
     New-Item -ItemType Directory -Force $logs | Out-Null
     $script:toolLog = Join-Path $logs 'tool.txt'
     $script:toolErrors = Join-Path $logs 'tool_errors.txt'
     $ui.toolOutput.Visibility = 'Visible'
-    $script:tool = Start-Process powershell -ArgumentList $arguments -WindowStyle Hidden -PassThru `
+    $script:tool = Start-Process $program -ArgumentList $arguments -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput $script:toolLog -RedirectStandardError $script:toolErrors
     $null = $script:tool.Handle
     $ui.rebuild.IsEnabled = $false; $ui.extract.IsEnabled = $false; $ui.playBtn.IsEnabled = $false
@@ -813,8 +813,8 @@ $ui.extract.Add_Click({
         if (-not $dialog.ShowDialog()) { return }
         $iso = Get-Item $dialog.FileName
     }
-    $command = "python -I `"$(Join-Path $root 'tools\xdvdfs_extract.py')`" `"$($iso.FullName)`" `"$($settings.dataPath)`""
-    Start-Tool 'Extracting the disc image' @('-NoProfile', '-Command', $command)
+    # DRA 2.exe extracts it (tools/launcher/play.c), so playing needs no Python
+    Start-Tool 'Extracting the disc image' @('-Extract', "`"$($iso.FullName)`"", "`"$($settings.dataPath)`"") (Join-Path $root 'DRA 2.exe')
 })
 
 # ------------------------------------------------------------------------------------------------- playing --

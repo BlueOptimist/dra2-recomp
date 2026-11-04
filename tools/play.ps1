@@ -30,7 +30,9 @@ function Test-Ready {
             return $false
         }
         Write-Host "  The game data hasn't been extracted yet. Extracting $($iso.Name) (about 1.6 GB, a few minutes)..."
-        python -I (Join-Path $root 'tools\xdvdfs_extract.py') $iso.FullName $data
+        # DRA 2.exe extracts it (tools/launcher/play.c): no Python needed
+        # (piped, so PowerShell waits for it and shows its progress: it's a windowed program)
+        & (Join-Path $root 'DRA 2.exe') -Extract $iso.FullName $data | ForEach-Object { Write-Host "  $_" }
         if ($LASTEXITCODE -or -not (Test-Path (Join-Path $data 'default.xbe'))) { Write-Host '  Extraction failed.'; return $false }
     }
     if (-not (Test-Path $exe)) {

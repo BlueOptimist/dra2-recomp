@@ -14,6 +14,28 @@ What you get: the game's own code, from your disc, running natively on Windows. 
 **You need:**
 - Windows 10 or 11, 64-bit, with a graphics card that runs Direct3D 9 (any from the last 15 years).
 - **A disc image of Digimon Rumble Arena 2 (USA) for the original Xbox**, made from your own disc. The usual redump-style `.iso` (about 7.3 GB) works, and so does an image of the game partition alone (an "XISO"). Other regions and the PlayStation 2 and GameCube versions won't work: the port is matched to this executable.
+
+Nothing to install: no Python, no compiler.
+
+**Steps:**
+1. **Download** `dra2-recomp-windows-<version>.zip` from the [latest release](https://github.com/BlueOptimist/dra2-recomp/releases/latest) (not "Source code") and unzip it. Pick a folder; spaces in the path are fine. Its `.sha256` file holds the ZIP's checksum, if you want to check it (`Get-FileHash <zip>` in PowerShell).
+2. **Open the launcher:** double-click **`DRA 2.exe`** in that folder. It has to stay there; you can pin it or make a shortcut to it. Its Home page shows three cards: game data, build and saves. The game data says *Missing*; the build is already *Ready* (the release comes built).
+3. **Extract the disc:** Advanced → **Extract the disc image**. If there's an `.iso` in the folder, it uses that one; otherwise it asks for it. It writes `extracted/` (2,863 files, about 1.6 GB) in under a minute to a few minutes, depending on the drive. The image itself is only read. From a terminal instead:
+   ```
+   & ".\DRA 2.exe" -Extract "D:\path\to\Digimon Rumble Arena 2 (USA).iso" extracted | Out-Host
+   ```
+4. **Play:** the Home cards now say *Ready*. Press **PLAY**. Fullscreen, resolution, picture shape and controls are on the launcher's pages (below). Settings and saves stay in this folder (`launcher_settings.json`, `saves/`).
+
+The release's `decomp/build/dra2_native.exe` and `.dll` hold only the port (the `.exe` is mostly empty space reserved for the Xbox's address range). GitHub Actions builds them from this repository with no game data. The game's code stays in your `extracted/default.xbe`, which they load when the game starts.
+
+**If something goes wrong:**
+- *The game closes or shows a crash message:* Advanced → **Open the last game log** (`logs/last_run.txt`). Its last lines say what went wrong. When reporting a problem, include them.
+- *Extraction stops:* the output box under the Advanced page's buttons says why: not an Xbox disc image, an incomplete image, or a full disk.
+- *Windows SmartScreen warns about `DRA 2.exe`:* it's unsigned. *More info → Run anyway*.
+
+### Building from source
+
+Only for changing the port: playing needs none of this. A git clone or the "Source code" ZIP has no built game: build it with Advanced → **Rebuild the game**, or `powershell -ExecutionPolicy Bypass -File tools\build_native.ps1`. It takes under a minute, writes `decomp/build/dra2_native.exe` and `dra2_native.dll`, and ends with `linked ...dra2_native.dll (... KB) and ...dra2_native.exe`. It needs:
 - **Python 3** (python.org). In its installer, tick *Add python.exe to PATH*. Then `python --version` in a new terminal should print 3.x, not open the Microsoft Store. Only the standard library is used.
 - **llvm-mingw**, a portable compiler (about 700 MB unzipped, no installer, no admin rights). From [its releases](https://github.com/mstorsjo/llvm-mingw/releases), take `llvm-mingw-<date>-ucrt-x86_64.zip` (the build here uses 20261006). Unzip it into one of these folders, and the build scripts find it there (`tools/find_mingw.ps1`):
   - this repository's folder;
@@ -21,32 +43,13 @@ What you get: the game's own code, from your disc, running natively on Windows. 
   - `%USERPROFILE%\Tools`.
 
   Anywhere else, set `DRA2_MINGW` to the unzipped folder.
-- Git, to clone (or download the repository as a zip from GitHub).
 
-**Steps:**
-1. **Clone the repository.** Pick a folder; spaces in the path are fine.
-   ```
-   git clone https://github.com/BlueOptimist/dra2-recomp.git
-   ```
-2. **Open the launcher:** double-click **`DRA 2.exe`** in the repository folder. It has to stay there; you can pin it or make a shortcut to it. Its Home page shows three cards: game data, build and saves. The first two say *Missing* and *Not built* on a fresh clone.
-3. **Extract the disc:** Advanced → **Extract the disc image**. If there's an `.iso` in the repository folder, it uses that one; otherwise it asks for it. It writes `extracted/` (2,863 files, about 1.6 GB) and takes a few minutes. The image itself is only read. From a terminal instead:
-   ```
-   python -I tools\xdvdfs_extract.py "D:\path\to\Digimon Rumble Arena 2 (USA).iso" extracted
-   ```
-4. **Build:** Advanced → **Rebuild the game**. It takes under a minute and writes `decomp/build/dra2_native.exe` and `dra2_native.dll`. Those hold only the port (the `.exe` is mostly empty space reserved for the Xbox's address range): the game's code stays in `extracted/default.xbe`, which they load when the game starts. From a terminal instead:
-   ```
-   powershell -ExecutionPolicy Bypass -File tools\build_native.ps1
-   ```
-   It ends with `linked ...dra2_native.dll (... KB) and ...dra2_native.exe`.
-5. **Play:** the Home cards now say *Ready*. Press **PLAY**. Fullscreen, resolution, picture shape and controls are on the launcher's pages (below). Settings and saves stay in this folder (`launcher_settings.json`, `saves/`).
+If the build fails, the launcher's output box shows why:
+- *Python 3 not found, or `python` opens the Microsoft Store:* reinstall Python with *Add python.exe to PATH* ticked, or turn off the `python.exe` App execution alias in Windows Settings.
+- *llvm-mingw not found:* check that the unzipped folder name starts with `llvm-mingw-` and is in one of the places listed above, or set `DRA2_MINGW`.
+- *Scripts won't run ("running scripts is disabled"):* run the commands as written: `-ExecutionPolicy Bypass` lets them run. `DRA 2.exe` passes it itself.
 
-**If something goes wrong:**
-- *`python` opens the Microsoft Store or isn't found:* reinstall Python with *Add python.exe to PATH* ticked, or turn off the `python.exe` App execution alias in Windows Settings.
-- *The build says llvm-mingw isn't found:* check that the unzipped folder name starts with `llvm-mingw-` and is in one of the places listed above, or set `DRA2_MINGW`.
-- *The build says `default.xbe` is missing:* extract first. If you pointed Advanced → game data folder somewhere else, the launcher's Rebuild uses that folder; from a terminal, set `DRA2_DATA` to it.
-- *The game closes or shows a crash message:* Advanced → **Open the last game log** (`logs/last_run.txt`). Its last lines say what went wrong. When reporting a problem, include them.
-- *Scripts won't run ("running scripts is disabled"):* run the commands above as written: `-ExecutionPolicy Bypass` lets them run. `DRA 2.exe` passes it itself.
-- *Windows SmartScreen warns about `DRA 2.exe`:* it's unsigned. *More info → Run anyway*. A git clone doesn't trigger the warning; a repository zip downloaded from GitHub can.
+The build doesn't need the game data: it reads the few addresses it uses from `analysis/native_symbols.tsv`. `tools/xdvdfs_extract.py` is the Python version of the disc extractor in `DRA 2.exe`; both give the same files.
 
 ### Playing
 
@@ -59,14 +62,15 @@ Double-click **`DRA 2.exe`** to open the launcher (`tools/launcher.ps1`, a WPF w
 - **Saves:** the saves folder, with backups to `save_backups/`.
 - **Advanced:** the game data folder, extracting the disc image, rebuilding the game and opening the last log.
 
-The launcher minimises while the game runs, then reports how the run ended, including any crash lines from `logs/last_run.txt`. Its settings live in `launcher_settings.json`, and saves go to `saves/`; both stay local. The native build needs only the port's sources, the extracted `default.xbe` and `analysis/native_symbols.tsv`: the Xbox library functions the port replaces and the kernel imports, by address. `tools/gen_native.py` rewrites that file from the Ghidra project's `analysis/data_symbols.tsv` wherever the analysis pipeline has run. (The recompiled build, `decomp/build/dra2.exe`, needs the whole pipeline.) `"DRA 2.exe" -Now` starts the game without the launcher, and `-Console` opens a text menu instead (`tools/play.ps1`).
+The launcher minimises while the game runs, then reports how the run ended, including any crash lines from `logs/last_run.txt`. Its settings live in `launcher_settings.json`, and saves go to `saves/`; both stay local. The native build needs only the port's sources and `analysis/native_symbols.tsv` (when the extracted `default.xbe` is there, it reads the kernel import table from it instead; the result is the same): the Xbox library functions the port replaces and the kernel imports, by address. `tools/gen_native.py` rewrites that file from the Ghidra project's `analysis/data_symbols.tsv` wherever the analysis pipeline has run. (The recompiled build, `decomp/build/dra2.exe`, needs the whole pipeline.) `"DRA 2.exe" -Now` starts the game without the launcher, and `-Console` opens a text menu instead (`tools/play.ps1`).
 
 Keyboard (player 1): arrows move, Z = A (jump), X = B (grab/throw), C = X (special), V = Y, Enter = Start, Esc = Back, Q/W = triggers, E/R = White/Black, I J K L = right stick (the defaults; the launcher's Controls page changes them). Windows controllers work too, and players 2-4 use them.
 
 GitHub Actions (`.github/workflows/ci.yml`) checks what the repository can check without the game:
 - the Python tools compile;
 - the shipped headers compile and the format struct sizes hold;
-- the platform layer builds as a 32-bit library (`dra2_port.lib`, uploaded as an artifact).
+- the platform layer builds as a 32-bit library (`dra2_port.lib`, uploaded as an artifact);
+- the `package` job builds the ready-to-play ZIP (the repository plus the built port and `DRA 2.exe`, with llvm-mingw 20261006 checked against its SHA-256) and, when a release is published, attaches the ZIP and its `.sha256` to it.
 
 ## What the disc is
 

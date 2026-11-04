@@ -21,7 +21,7 @@ Pop-Location
 if ($rc) { 'resource compile failed'; exit 1 }
 $exe = Join-Path $root 'DRA 2.exe'
 & (Join-Path $mingw 'x86_64-w64-mingw32-clang.exe') -O2 -municode -mwindows -Wall (Join-Path $here 'play.c') `
-    (Join-Path $tmp 'play_res.o') -o $exe
+    (Join-Path $tmp 'play_res.o') -o $exe -lshell32
 if ($LASTEXITCODE) { 'DRA 2.exe failed to build'; exit 1 }
 # the old name, from before it was renamed
 Remove-Item (Join-Path $root 'Play.exe') -ErrorAction SilentlyContinue
