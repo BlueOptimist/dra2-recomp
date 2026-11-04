@@ -1210,8 +1210,15 @@ void gpu_draw(int primitive, const GpuVertex *v, unsigned count)
     D3DPRIMITIVETYPE type;
     unsigned prims;
     /* widescreen, on the back buffer: 3D spread over the width, 2D in the middle unless it spans the whole width */
-    int wide = !drawing_into && buffer_width != game_width, full = 0;
-    if (wide && gpu_draw_2d) {
+    int wide = !drawing_into && buffer_width != game_width, full = 0, two_d = gpu_draw_2d;
+    if (wide && !two_d) {
+        /* the HUD panels and some text come through a vertex program that passes screen coordinates through: every
+         * vertex at rhw 1 and the same depth, which projected 3D never is. They're 2D too. */
+        two_d = 1;
+        for (unsigned i = 0; i < count && two_d; i++)
+            two_d = v[i].rhw == 1.0f && v[i].z == v[0].z;
+    }
+    if (wide && two_d) {
         float lo = v[0].x, hi = v[0].x;
         for (unsigned i = 1; i < count; i++)
             lo = v[i].x < lo ? v[i].x : lo, hi = v[i].x > hi ? v[i].x : hi;
@@ -1219,7 +1226,7 @@ void gpu_draw(int primitive, const GpuVertex *v, unsigned count)
     }
     /* on the back buffer at another resolution: the game's pixel edges onto the scaled ones (sx, sy) */
     float sx = drawing_into ? 1.0f : scale_x, sy = drawing_into ? 1.0f : scale_y;
-    #define PUT(i) do { scratch[n] = v[i]; if (wide) scratch[n].x = wide_x(scratch[n].x, gpu_draw_2d, full); \
+    #define PUT(i) do { scratch[n] = v[i]; if (wide) scratch[n].x = wide_x(scratch[n].x, two_d, full); \
                         scratch[n].x = scratch[n].x * sx - 0.5f, scratch[n].y = scratch[n].y * sy - 0.5f; n++; } while (0)
     switch (primitive) {
     case 1: type = D3DPT_POINTLIST; for (unsigned i = 0; i < count; i++) PUT(i); prims = n; break;
