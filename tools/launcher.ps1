@@ -27,6 +27,8 @@ $settings = [ordered]@{
     display = '2'                                 # 1..4 (window scale) or fullscreen
     aspect = '4:3'                                # the picture's shape (DRA2_ASPECT): 4:3, 16:10, 16:9 or 21:9
     resolution = '1080'                           # lines drawn (DRA2_RESOLUTION): 480 (original), 720, 1080, 1440, 2160
+    keys = ''                                     # keyboard bindings (DRA2_KEYS): control=vk[+vk],... in hex; '' = defaults
+    pad = ''                                      # controller bindings (DRA2_PAD): control=button,...; '' = defaults
     soft = $true                                  # the Xbox's soft display (DRA2_SOFT)
     sound = $true
     record = $false
@@ -158,6 +160,27 @@ function Save-Settings { $settings | ConvertTo-Json | Set-Content $settingsFile 
               <Setter TargetName="b" Property="BorderBrush" Value="#38C8FF"/><Setter TargetName="b" Property="Background" Value="#CC17306A"/>
             </Trigger>
             <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.45"/></Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value></Setter>
+    </Style>
+
+    <!-- a binding on the Controls page: compact, highlighted while it waits for a key -->
+    <Style x:Key="Slot" TargetType="Button">
+      <Setter Property="Foreground" Value="#DDE8FF"/><Setter Property="FontFamily" Value="Segoe UI Semibold"/>
+      <Setter Property="FontSize" Value="12"/><Setter Property="Cursor" Value="Hand"/><Setter Property="Margin" Value="0,1,6,1"/>
+      <Setter Property="Template"><Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Border x:Name="b" CornerRadius="5" BorderThickness="1" BorderBrush="#3A5A9A" Background="#CC102048" Padding="8,2">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="b" Property="BorderBrush" Value="#38C8FF"/><Setter TargetName="b" Property="Background" Value="#CC17306A"/>
+            </Trigger>
+            <Trigger Property="Tag" Value="waiting">
+              <Setter TargetName="b" Property="BorderBrush" Value="#FFB21E"/><Setter TargetName="b" Property="Background" Value="#CC4A3208"/>
+            </Trigger>
           </ControlTemplate.Triggers>
         </ControlTemplate>
       </Setter.Value></Setter>
@@ -354,10 +377,26 @@ function Save-Settings { $settings | ConvertTo-Json | Set-Content $settingsFile 
         <StackPanel x:Name="pageControls" Visibility="Collapsed">
           <TextBlock Text="CONTROLS" Style="{StaticResource Heading}"/>
           <TextBlock Text="Player 1 uses the keyboard and the first controller together; players 2-4 use controllers (any XInput pad)." Style="{StaticResource Sub}"/>
-          <TextBlock Text="KEYBOARD" Style="{StaticResource Label}"/>
-          <Border Style="{StaticResource Card}" Width="620" HorizontalAlignment="Left">
-            <Grid x:Name="keyTable"/>
-          </Border>
+          <StackPanel Orientation="Horizontal">
+            <StackPanel Width="450">
+              <DockPanel Width="420" HorizontalAlignment="Left">
+                <Button x:Name="resetKeys" DockPanel.Dock="Right" Style="{StaticResource Slot}" Content="Reset" Height="22" VerticalAlignment="Bottom"/>
+                <TextBlock Text="KEYBOARD" Style="{StaticResource Label}"/>
+              </DockPanel>
+              <Grid x:Name="keyTable"/>
+            </StackPanel>
+            <StackPanel Width="370">
+              <DockPanel Width="340" HorizontalAlignment="Left">
+                <Button x:Name="resetPad" DockPanel.Dock="Right" Style="{StaticResource Slot}" Content="Reset" Height="22" VerticalAlignment="Bottom"/>
+                <TextBlock Text="CONTROLLER" Style="{StaticResource Label}"/>
+              </DockPanel>
+              <Grid x:Name="padTable"/>
+              <TextBlock Style="{StaticResource Sub}" TextWrapping="Wrap" Width="340" HorizontalAlignment="Left" Margin="0,12,0,0"
+                         Text="Keyboard: click a key, then press the new one; right-click clears it. Controller: click to pick the next button, right-click for the previous. The d-pad and sticks stay as they are."/>
+              <TextBlock Style="{StaticResource Sub}" TextWrapping="Wrap" Width="340" HorizontalAlignment="Left" Margin="0,8,0,0"
+                         Text="Alt+Enter or F11 switches between the window and fullscreen."/>
+            </StackPanel>
+          </StackPanel>
         </StackPanel>
 
         <!-- SAVES -->
@@ -532,22 +571,156 @@ foreach ($key in $resolutions.Keys) {
     $ui.resolutionModes.Children.Add($chip) | Out-Null
 }
 
-# keyboard table
-$keys = @(
-    @('Arrow keys', 'Move / d-pad'), @('Z', 'A  (jump)'), @('X', 'B  (grab / throw)'), @('C', 'X  (special attack)'),
-    @('V', 'Y'), @('Enter', 'Start  (pause)'), @('Esc / Backspace', 'Back'), @('Q / W', 'Left / right trigger'),
-    @('E / R', 'White / Black'), @('I  J  K  L', 'Right stick'), @('Alt+Enter / F11', 'Window / fullscreen'))
-$grid = $ui.keyTable
-$grid.ColumnDefinitions.Add((New-Object Windows.Controls.ColumnDefinition -Property @{ Width = (New-Object Windows.GridLength 170) }))
-$grid.ColumnDefinitions.Add((New-Object Windows.Controls.ColumnDefinition -Property @{ Width = (New-Object Windows.GridLength 1, 'Star') }))
-for ($i = 0; $i -lt $keys.Count; $i++) {
-    $grid.RowDefinitions.Add((New-Object Windows.Controls.RowDefinition -Property @{ Height = (New-Object Windows.GridLength 27) }))
-    $k = New-Object Windows.Controls.TextBlock -Property @{ Text = $keys[$i][0]; FontFamily = 'Segoe UI Semibold'; FontSize = 14 }
-    $k.Foreground = $window.FindResource('Accent')
-    $v = New-Object Windows.Controls.TextBlock -Property @{ Text = $keys[$i][1]; FontSize = 14 }
-    [Windows.Controls.Grid]::SetRow($k, $i); [Windows.Controls.Grid]::SetRow($v, $i); [Windows.Controls.Grid]::SetColumn($v, 1)
-    $grid.Children.Add($k) | Out-Null; $grid.Children.Add($v) | Out-Null
+# controls: rebinding the keyboard (DRA2_KEYS) and the controller's buttons (DRA2_PAD), as port/xapi.c reads them.
+# The game's controls by name, with their labels and default keys (hex virtual-key codes, + between two keys)
+$controlList = @(
+    @('up', 'Up  (move, d-pad)', '26'), @('down', 'Down', '28'), @('left', 'Left', '25'), @('right', 'Right', '27'),
+    @('a', 'A  (jump)', '5a'), @('b', 'B  (grab / throw)', '58'), @('x', 'X  (special attack)', '43'), @('y', 'Y', '56'),
+    @('white', 'White', '45'), @('black', 'Black', '52'), @('lt', 'Left trigger', '51'), @('rt', 'Right trigger', '57'),
+    @('start', 'Start  (pause)', '0d'), @('back', 'Back', '1b+08'),
+    @('rup', 'Right stick up', '49'), @('rdown', 'Right stick down', '4b'), @('rleft', 'Right stick left', '4a'),
+    @('rright', 'Right stick right', '4c'))
+# the controller: which button sets each of the game's buttons
+$padChoices = 'a', 'b', 'x', 'y', 'lb', 'rb', 'lt', 'rt', 'start', 'back', 'ls', 'rs'
+$padLabels = @{ a = 'A'; b = 'B'; x = 'X'; y = 'Y'; lb = 'LB'; rb = 'RB'; lt = 'LT'; rt = 'RT'; start = 'Start'; back = 'Back'
+                ls = 'Left stick click'; rs = 'Right stick click' }
+$padList = @(
+    @('a', 'A  (jump)', 'a'), @('b', 'B  (grab / throw)', 'b'), @('x', 'X  (special attack)', 'x'), @('y', 'Y', 'y'),
+    @('white', 'White', 'lb'), @('black', 'Black', 'rb'), @('lt', 'Left trigger', 'lt'), @('rt', 'Right trigger', 'rt'),
+    @('start', 'Start  (pause)', 'start'), @('back', 'Back', 'back'))
+
+function Read-Bindings([string]$text) {
+    $map = @{}
+    foreach ($pair in ($text -split ',')) {
+        $name, $value = $pair -split '=', 2
+        if ($name -and $null -ne $value) { $map[$name.Trim()] = $value.Trim() }
+    }
+    $map
 }
+function Read-Keys([string]$text) {  # 'vk+vk' to two ints, 0 for none
+    $vks = @(0, 0); $i = 0
+    foreach ($part in ($text -split '\+')) { if ($part -and $i -lt 2) { $vks[$i++] = [Convert]::ToInt32($part, 16) } }
+    , $vks
+}
+$keyMap = [ordered]@{}; $padMap = [ordered]@{}
+function Reset-KeyMap { foreach ($c in $controlList) { $keyMap[$c[0]] = Read-Keys $c[2] } }
+function Reset-PadMap { foreach ($p in $padList) { $padMap[$p[0]] = $p[2] } }
+Reset-KeyMap; Reset-PadMap
+try {
+    $saved = Read-Bindings $settings.keys
+    foreach ($n in $saved.Keys) { if ($keyMap.Contains($n)) { $keyMap[$n] = Read-Keys $saved[$n] } }
+    $saved = Read-Bindings $settings.pad
+    foreach ($n in $saved.Keys) { if ($padMap.Contains($n) -and $padChoices -contains $saved[$n]) { $padMap[$n] = $saved[$n] } }
+} catch { Reset-KeyMap; Reset-PadMap }
+
+function Save-Keys {
+    $settings.keys = (@($keyMap.Keys) | ForEach-Object {
+        $name = $_
+        "$name=" + ((@($keyMap[$name]) | Where-Object { $_ } | ForEach-Object { '{0:x2}' -f $_ }) -join '+')
+    }) -join ','
+    Save-Settings
+}
+function Save-Pad { $settings.pad = (@($padMap.Keys) | ForEach-Object { "$_=$($padMap[$_])" }) -join ','; Save-Settings }
+
+function Key-Name([int]$vk) {
+    if (-not $vk) { return '—' }
+    $names = @{ 0x0d = 'Enter'; 0x1b = 'Esc'; 0x08 = 'Backspace'; 0x20 = 'Space'; 0x09 = 'Tab'; 0x26 = '↑'; 0x28 = '↓'
+                0x25 = '←'; 0x27 = '→'; 0xa0 = 'Left Shift'; 0xa1 = 'Right Shift'; 0xa2 = 'Left Ctrl'; 0xa3 = 'Right Ctrl'
+                0xa4 = 'Left Alt'; 0xa5 = 'Right Alt'; 0x2e = 'Delete'; 0x2d = 'Insert'; 0x24 = 'Home'; 0x23 = 'End'
+                0x21 = 'Page Up'; 0x22 = 'Page Down' }
+    if ($names.ContainsKey($vk)) { return $names[$vk] }
+    $k = [Windows.Input.KeyInterop]::KeyFromVirtualKey($vk).ToString()
+    if ($k -match '^D(\d)$') { return $Matches[1] }
+    if ($k -match '^NumPad(\d)$') { return "Num $($Matches[1])" }
+    $k -replace '^Oem', ''
+}
+
+function Add-Row($grid, [string]$text) {
+    $row = $grid.RowDefinitions.Count
+    $grid.RowDefinitions.Add((New-Object Windows.Controls.RowDefinition -Property @{ Height = (New-Object Windows.GridLength 23) }))
+    $label = New-Object Windows.Controls.TextBlock -Property @{ Text = $text; FontSize = 13; VerticalAlignment = 'Center' }
+    [Windows.Controls.Grid]::SetRow($label, $row)
+    $grid.Children.Add($label) | Out-Null
+    $row
+}
+function Add-Slot($grid, [int]$row, [int]$column, [string]$id) {
+    $b = New-Object Windows.Controls.Button -Property @{ Uid = $id; Tag = '' }
+    $b.Style = $window.FindResource('Slot')
+    [Windows.Controls.Grid]::SetRow($b, $row); [Windows.Controls.Grid]::SetColumn($b, $column)
+    $grid.Children.Add($b) | Out-Null
+    $b
+}
+
+# keyboard: two keys per control; click one, then press the new key (right-click clears it)
+$keySlots = @()
+foreach ($w in 165, 125, 125) {
+    $ui.keyTable.ColumnDefinitions.Add((New-Object Windows.Controls.ColumnDefinition -Property @{ Width = (New-Object Windows.GridLength $w) }))
+}
+foreach ($c in $controlList) {
+    $row = Add-Row $ui.keyTable $c[1]
+    for ($slot = 0; $slot -lt 2; $slot++) {
+        $b = Add-Slot $ui.keyTable $row ($slot + 1) "$($c[0])|$slot"
+        $b.Add_Click({ param($s) Start-Capture $s })
+        $b.Add_MouseRightButtonUp({ param($s, $e) $e.Handled = $true; $script:capture = $null; Set-Key $s 0 })
+        $keySlots += $b
+    }
+}
+function Show-Keys {
+    foreach ($b in $keySlots) {
+        $name, $slot = $b.Uid -split '\|'
+        $b.Tag = ''; $b.Content = Key-Name $keyMap[$name][[int]$slot]
+    }
+}
+$script:capture = $null
+function Start-Capture($button) {
+    $was = $script:capture
+    Show-Keys
+    $script:capture = $null
+    if ($was -eq $button) { return }  # a second click cancels
+    $script:capture = $button; $button.Tag = 'waiting'; $button.Content = 'press a key…'
+}
+function Set-Key($button, [int]$vk) {
+    $name, $slot = $button.Uid -split '\|'
+    if ($vk) {  # a key does one thing: taken from wherever else it was
+        foreach ($other in @($keyMap.Keys)) { for ($k = 0; $k -lt 2; $k++) { if ($keyMap[$other][$k] -eq $vk) { $keyMap[$other][$k] = 0 } } }
+    }
+    $keyMap[$name][[int]$slot] = $vk
+    Save-Keys; Show-Keys
+}
+$window.Add_PreviewKeyDown({
+    param($s, $e)
+    if (-not $script:capture) { return }
+    $e.Handled = $true
+    $key = if ($e.Key -eq 'System') { $e.SystemKey } else { $e.Key }
+    if ($key -eq 'F11') { return }  # the game's fullscreen key
+    $vk = [Windows.Input.KeyInterop]::VirtualKeyFromKey($key)
+    if (-not $vk) { return }
+    $b = $script:capture; $script:capture = $null
+    Set-Key $b $vk
+})
+$ui.resetKeys.Add_Click({ $script:capture = $null; Reset-KeyMap; $settings.keys = ''; Save-Settings; Show-Keys })
+Show-Keys
+
+# controller: click a button to pick the next choice, right-click for the previous
+$padSlots = @()
+foreach ($w in 165, 150) {
+    $ui.padTable.ColumnDefinitions.Add((New-Object Windows.Controls.ColumnDefinition -Property @{ Width = (New-Object Windows.GridLength $w) }))
+}
+foreach ($p in $padList) {
+    $row = Add-Row $ui.padTable $p[1]
+    $b = Add-Slot $ui.padTable $row 1 $p[0]
+    $b.Add_Click({ param($s) Step-Pad $s 1 })
+    $b.Add_MouseRightButtonUp({ param($s, $e) $e.Handled = $true; Step-Pad $s -1 })
+    $padSlots += $b
+}
+function Show-Pad { foreach ($b in $padSlots) { $b.Content = $padLabels[$padMap[$b.Uid]] } }
+function Step-Pad($button, [int]$step) {
+    $i = [array]::IndexOf($padChoices, $padMap[$button.Uid])
+    $padMap[$button.Uid] = $padChoices[($i + $step + $padChoices.Count) % $padChoices.Count]
+    Save-Pad; Show-Pad
+}
+$ui.resetPad.Add_Click({ Reset-PadMap; $settings.pad = ''; Save-Settings; Show-Pad })
+Show-Pad
 
 # --------------------------------------------------------------------------------------------- navigation --
 $pages = 'Home', 'Display', 'Audio', 'Controls', 'Saves', 'Advanced'
@@ -648,7 +821,7 @@ function Start-Game {
     New-Item -ItemType Directory -Force $settings.savesPath, $logs | Out-Null
     foreach ($name in 'DRA2_INPUT', 'DRA2_ARENA', 'DRA2_SNAPSHOT', 'DRA2_LOGFRAME', 'DRA2_LOGDRAW', 'DRA2_SAMPLE',
                       'DRA2_MUTE', 'DRA2_SOUNDDUMP', 'DRA2_LOGSOUND', 'DRA2_WINDOW', 'DRA2_SOFT', 'DRA2_ASPECT',
-                      'DRA2_RESOLUTION') {
+                      'DRA2_RESOLUTION', 'DRA2_KEYS', 'DRA2_PAD') {
         [Environment]::SetEnvironmentVariable($name, $null, 'Process')
     }
     $env:DRA2_DATA = $settings.dataPath
@@ -657,6 +830,8 @@ function Start-Game {
     if (-not $settings.soft) { $env:DRA2_SOFT = '0' }
     if ($settings.aspect -ne '4:3') { $env:DRA2_ASPECT = $settings.aspect }
     $env:DRA2_RESOLUTION = [string]$settings.resolution
+    if ($settings.keys) { $env:DRA2_KEYS = [string]$settings.keys }
+    if ($settings.pad) { $env:DRA2_PAD = [string]$settings.pad }
     if (-not $settings.sound) { $env:DRA2_MUTE = '1' }
     if ($settings.record) { $env:DRA2_SOUNDDUMP = Join-Path $logs 'sound.wav' }
     $script:gameLog = Join-Path $logs 'last_run.txt'

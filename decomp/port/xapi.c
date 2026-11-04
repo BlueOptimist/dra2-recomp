@@ -817,7 +817,7 @@ void *__stdcall XAPILIB__XInputOpen(void *type, DWORD port, DWORD slot, void *po
 
 void __stdcall XAPILIB__XInputClose(void *handle) { (void)handle; }
 
-/* Player 1 on the keyboard, read only while the game's window has the focus:
+/* Player 1 on the keyboard, read only while the game's window has the focus. By default (DRA2_KEYS rebinds them):
  *   arrows        d-pad and left stick      Z X C V    A B X Y
  *   I J K L       right stick               Q W        left and right triggers
  *   Enter         Start                     E R        White and Black
@@ -900,27 +900,135 @@ static void script_pad(WIN_STATE *st)
     st->dwPacketNumber += packets << 16;  /* a new packet with each change (the keyboard counts in the low half) */
 }
 
+/* Rebinding (the launcher's Controls page). The controls by name, each with the Windows controller bit it sets (the
+ * triggers and the right stick have none) and its default keys:
+ *   DRA2_KEYS=<control>=<vk>[+<vk>],...  keyboard keys, as hex virtual-key codes (up=26,a=5a,back=1b+08); a control
+ *                                         left out keeps its default keys, one given as <control>= has none
+ *   DRA2_PAD=<control>=<button>,...      which controller button sets each of the game's buttons (white=lb,black=rb);
+ *                                         buttons: a b x y lb rb lt rt start back ls rs. The d-pad and sticks stay. */
+enum { C_UP, C_DOWN, C_LEFT, C_RIGHT, C_A, C_B, C_X, C_Y, C_WHITE, C_BLACK, C_LT, C_RT, C_START, C_BACK, C_RUP,
+       C_RDOWN, C_RLEFT, C_RRIGHT, C_COUNT };
+static const struct { const char *name; WORD bit; BYTE keys[2]; } controls[C_COUNT] = {
+    { "up", 0x0001, { 0x26 } }, { "down", 0x0002, { 0x28 } }, { "left", 0x0004, { 0x25 } }, { "right", 0x0008, { 0x27 } },
+    { "a", 0x1000, { 'Z' } }, { "b", 0x2000, { 'X' } }, { "x", 0x4000, { 'C' } }, { "y", 0x8000, { 'V' } },
+    { "white", 0x0100, { 'E' } }, { "black", 0x0200, { 'R' } }, { "lt", 0, { 'Q' } }, { "rt", 0, { 'W' } },
+    { "start", 0x0010, { 0x0d } }, { "back", 0x0020, { 0x1b, 0x08 } },
+    { "rup", 0, { 'I' } }, { "rdown", 0, { 'K' } }, { "rleft", 0, { 'J' } }, { "rright", 0, { 'L' } },
+};
+static BYTE bound_keys[C_COUNT][2];
+/* the controller: for each game button (a b x y white black lt rt start back), the Windows button that sets it */
+enum { P_A, P_B, P_X, P_Y, P_LB, P_RB, P_LT, P_RT, P_START, P_BACK, P_LS, P_RS, P_COUNT };
+static const char *const pad_names[P_COUNT] = { "a", "b", "x", "y", "lb", "rb", "lt", "rt", "start", "back", "ls", "rs" };
+static const WORD pad_bits[P_COUNT] = { 0x1000, 0x2000, 0x4000, 0x8000, 0x0100, 0x0200, 0, 0, 0x0010, 0x0020, 0x0040,
+                                        0x0080 };
+static const int pad_controls[] = { C_A, C_B, C_X, C_Y, C_WHITE, C_BLACK, C_LT, C_RT, C_START, C_BACK };
+static const int pad_defaults[] = { P_A, P_B, P_X, P_Y, P_LB, P_RB, P_LT, P_RT, P_START, P_BACK };
+static int pad_source[sizeof pad_controls / sizeof *pad_controls];
+static int pad_remapped;
+
+/* the next "<name>=<value>" of a list: name and value copied out, 0 at the end */
+static const char *next_binding(const char *p, char *name, char *value, unsigned size)
+{
+    while (*p == ',' || *p == ' ')
+        p++;
+    if (!*p)
+        return 0;
+    unsigned n = 0, v = 0;
+    while (*p && *p != '=' && *p != ',')
+        name[n < size - 1 ? n++ : n] = *p++;
+    name[n] = 0;
+    if (*p == '=')
+        for (p++; *p && *p != ','; p++)
+            value[v < size - 1 ? v++ : v] = *p;
+    value[v] = 0;
+    return p;
+}
+
+static int same_name(const char *a, const char *b)
+{
+    while (*a && (*a | 0x20) == (*b | 0x20))
+        a++, b++;
+    return !*a && !*b;
+}
+
+static void load_bindings(void)
+{
+    static int loaded;
+    if (loaded)
+        return;
+    loaded = 1;
+    for (int c = 0; c < C_COUNT; c++)
+        bound_keys[c][0] = controls[c].keys[0], bound_keys[c][1] = controls[c].keys[1];
+    for (unsigned g = 0; g < sizeof pad_controls / sizeof *pad_controls; g++)
+        pad_source[g] = pad_defaults[g];
+    char list[1024], name[32], value[32];
+    if (GetEnvironmentVariableA("DRA2_KEYS", list, sizeof list) - 1 < sizeof list - 1)
+        for (const char *p = list; (p = next_binding(p, name, value, sizeof name)) != 0;)
+            for (int c = 0; c < C_COUNT; c++)
+                if (same_name(controls[c].name, name)) {
+                    const char *rest = value;
+                    for (int k = 0; k < 2; k++) {
+                        unsigned vk = 0;
+                        for (; *rest && *rest != '+'; rest++) {
+                            char d = (char)(*rest | 0x20);
+                            vk = vk * 16 + (unsigned)(d >= 'a' && d <= 'f' ? d - 'a' + 10 : d - '0') % 16;
+                        }
+                        bound_keys[c][k] = vk < 256 ? (BYTE)vk : 0;
+                        if (*rest == '+')
+                            rest++;
+                    }
+                }
+    if (GetEnvironmentVariableA("DRA2_PAD", list, sizeof list) - 1 < sizeof list - 1)
+        for (const char *p = list; (p = next_binding(p, name, value, sizeof name)) != 0;)
+            for (unsigned g = 0; g < sizeof pad_controls / sizeof *pad_controls; g++)
+                if (same_name(controls[pad_controls[g]].name, name))
+                    for (int s = 0; s < P_COUNT; s++)
+                        if (same_name(pad_names[s], value) && s != pad_defaults[g])
+                            pad_source[g] = s, pad_remapped = 1;}
+
+/* a Windows controller's buttons and triggers through DRA2_PAD's map (the d-pad, sticks and stick clicks stay) */
+static void remap_pad(WIN_STATE *st)
+{
+    if (!pad_remapped)
+        return;
+    WIN_GAMEPAD in = st->Gamepad;
+    int down[P_COUNT];
+    for (int s = 0; s < P_COUNT; s++)
+        down[s] = s == P_LT ? in.bLeftTrigger > 30 : s == P_RT ? in.bRightTrigger > 30 : (in.wButtons & pad_bits[s]) != 0;
+    st->Gamepad.wButtons = in.wButtons & 0x00cf;  /* d-pad and stick clicks */
+    st->Gamepad.bLeftTrigger = st->Gamepad.bRightTrigger = 0;
+    for (unsigned g = 0; g < sizeof pad_controls / sizeof *pad_controls; g++) {
+        int s = pad_source[g], c = pad_controls[g];
+        /* an analog trigger kept on a trigger keeps its pressure */
+        BYTE amount = s == P_LT ? in.bLeftTrigger : s == P_RT ? in.bRightTrigger : (BYTE)(down[s] ? 255 : 0);
+        if (c == C_LT)
+            st->Gamepad.bLeftTrigger = amount > st->Gamepad.bLeftTrigger ? amount : st->Gamepad.bLeftTrigger;
+        else if (c == C_RT)
+            st->Gamepad.bRightTrigger = amount > st->Gamepad.bRightTrigger ? amount : st->Gamepad.bRightTrigger;
+        else if (down[s])
+            st->Gamepad.wButtons |= controls[c].bit;
+    }
+}
+
+static int held(int c) { return (bound_keys[c][0] && key(bound_keys[c][0])) || (bound_keys[c][1] && key(bound_keys[c][1])); }
+
 static void keyboard_pad(WIN_STATE *st)
 {
     DWORD owner = 0;
     HWND focus = GetForegroundWindow();
     if (!focus || (GetWindowThreadProcessId(focus, &owner), owner != GetCurrentProcessId()))
         return;
-    static const struct { int vk; WORD bit; } buttons[] = {
-        { 0x26, 0x0001 }, { 0x28, 0x0002 }, { 0x25, 0x0004 }, { 0x27, 0x0008 },  /* arrows: d-pad */
-        { 0x0d, 0x0010 }, { 0x1b, 0x0020 }, { 0x08, 0x0020 },                    /* Enter: Start; Esc, Backspace: Back */
-        { 'Z', 0x1000 }, { 'X', 0x2000 }, { 'C', 0x4000 }, { 'V', 0x8000 },      /* A B X Y */
-        { 'E', 0x0100 }, { 'R', 0x0200 },                                        /* White, Black (the shoulders) */
-    };
     WORD before = st->Gamepad.wButtons;
-    for (unsigned k = 0; k < sizeof buttons / sizeof buttons[0]; k++)
-        if (key(buttons[k].vk))
-            st->Gamepad.wButtons |= buttons[k].bit;
-    if (key('Q'))
+    for (int c = 0; c < C_COUNT; c++)
+        if (controls[c].bit && held(c))
+            st->Gamepad.wButtons |= controls[c].bit;
+    int lt = held(C_LT), rt = held(C_RT);
+    if (lt)
         st->Gamepad.bLeftTrigger = 255;
-    if (key('W'))
+    if (rt)
         st->Gamepad.bRightTrigger = 255;
-    int lx = key(0x27) - key(0x25), ly = key(0x26) - key(0x28), rx = key('L') - key('J'), ry = key('I') - key('K');
+    int lx = held(C_RIGHT) - held(C_LEFT), ly = held(C_UP) - held(C_DOWN), rx = held(C_RRIGHT) - held(C_RLEFT),
+        ry = held(C_RUP) - held(C_RDOWN);
     if (lx)
         st->Gamepad.sThumbLX = (short)(lx * 32767);
     if (ly)
@@ -930,7 +1038,8 @@ static void keyboard_pad(WIN_STATE *st)
     if (ry)
         st->Gamepad.sThumbRY = (short)(ry * 32767);
     static DWORD last_keys, packets;
-    DWORD keys = (DWORD)(st->Gamepad.wButtons & ~before) << 8 | key('Q') << 1 | key('W') | (DWORD)(rx + 1) << 24 | (DWORD)(ry + 1) << 28;
+    DWORD keys = (DWORD)(st->Gamepad.wButtons & ~before) << 8 | (DWORD)lt << 1 | (DWORD)rt | (DWORD)(rx + 1) << 24 |
+                 (DWORD)(ry + 1) << 28;
     if (keys != last_keys)
         packets++, last_keys = keys;
     st->dwPacketNumber += packets;  /* changes with every new key state, as the game expects of a new packet */
@@ -942,11 +1051,13 @@ DWORD __stdcall XAPILIB__XInputGetState(void *handle, XBOX_STATE *out)
     DWORD port = (DWORD)handle - 1;
     if (port > 3)
         return ERROR_DEVICE_NOT_CONNECTED;
+    load_bindings();
     if (!xinput_ready() || win_get_state(port, &st) != ERROR_SUCCESS) {
         if (port != 0)
             return ERROR_DEVICE_NOT_CONNECTED;
         __builtin_memset(&st, 0, sizeof st);  /* player 1 without a controller: the keyboard alone */
-    }
+    } else
+        remap_pad(&st);
     if (port == 0)
         keyboard_pad(&st), script_pad(&st);
     WORD b = st.Gamepad.wButtons;

@@ -16,13 +16,13 @@ Double-click **`DRA 2.exe`** to open the launcher (`tools/launcher.ps1`, a WPF w
 - **Home:** whether the game data, the build and saves are ready, plus quick settings.
 - **Display:** a 1×–4× window or fullscreen (Alt+Enter or F11 switches in game). The resolution is 1080p by default, or 480p (the Xbox's), 720p, 1440p or 4K. The picture shape is 4:3 as on the Xbox, or 16:10, 16:9 or 21:9, which show more of each scene at the sides without stretching it. There's also the Xbox's soft display, on by default.
 - **Audio:** sound on or off, and recording to `logs/sound.wav`.
-- **Controls:** the keyboard map.
+- **Controls:** rebind the keyboard (two keys per control) and the controller's buttons.
 - **Saves:** the saves folder, with backups to `save_backups/`.
 - **Advanced:** the game data folder, extracting the disc image, rebuilding the game and opening the last log.
 
 The launcher minimises while the game runs, then reports how the run ended, including any crash lines from `logs/last_run.txt`. Its settings live in `launcher_settings.json`, and saves go to `saves/`; both stay local. Building needs the decompiled code in `decomp/build`, which only exists on a machine that has run the pipeline. `"DRA 2.exe" -Now` (or `Play.cmd -Now`) starts the game without the launcher, and `-Console` opens a text menu instead (`tools/play.ps1`).
 
-Keyboard (player 1): arrows move, Z = A (jump), X = B (grab/throw), C = X (special), V = Y, Enter = Start, Esc = Back, Q/W = triggers, E/R = White/Black, I J K L = right stick. Windows controllers work too, and players 2-4 use them.
+Keyboard (player 1): arrows move, Z = A (jump), X = B (grab/throw), C = X (special), V = Y, Enter = Start, Esc = Back, Q/W = triggers, E/R = White/Black, I J K L = right stick (the defaults; the launcher's Controls page changes them). Windows controllers work too, and players 2-4 use them.
 
 GitHub Actions (`.github/workflows/ci.yml`) checks what the repository can check without the game:
 - the Python tools compile;
