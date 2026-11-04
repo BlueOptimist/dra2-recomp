@@ -798,6 +798,7 @@ function Start-Tool([string]$title, [string[]]$arguments) {
     $script:toolTitle = $title
 }
 $ui.rebuild.Add_Click({
+    $env:DRA2_DATA = $settings.dataPath  # the build reads default.xbe from there
     Start-Tool 'Building the game' @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$(Join-Path $root 'tools\build_native.ps1')`"")
 })
 $ui.extract.Add_Click({

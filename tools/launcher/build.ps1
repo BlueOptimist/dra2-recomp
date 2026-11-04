@@ -3,7 +3,8 @@
 # The icon is cover.ico when there is one (make_icon.ps1 -Image <picture>), otherwise icon.ico.
 $here = $PSScriptRoot
 $root = Split-Path -Parent (Split-Path -Parent $here)
-$mingw = 'C:\Users\Veo\Tools\llvm-mingw-20261006-ucrt-x86_64\bin'
+$mingw = & (Join-Path (Split-Path -Parent $here) 'find_mingw.ps1')
+if (-not $mingw) { exit 1 }
 $tmp = Join-Path $env:TEMP 'dra2_play_exe'
 New-Item -ItemType Directory -Force $tmp | Out-Null
 if (-not (Test-Path (Join-Path $here 'icon.ico'))) { & (Join-Path $here 'make_icon.ps1') }

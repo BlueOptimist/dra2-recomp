@@ -3,7 +3,8 @@
 # optimisation (build/native/port_*.obj).
 # Usage: powershell -File tools\build_native.ps1
 $root = Split-Path -Parent $PSScriptRoot
-$mingw = 'C:\Users\Veo\Tools\llvm-mingw-20261006-ucrt-x86_64\bin'
+$mingw = & (Join-Path $PSScriptRoot 'find_mingw.ps1')
+if (-not $mingw) { exit 1 }
 $build = Join-Path $root 'decomp\build'
 $out = Join-Path $build 'native'
 New-Item -ItemType Directory -Force $out | Out-Null

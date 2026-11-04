@@ -72,3 +72,4 @@
 !/analysis/missing_this.tsv
 !/analysis/code_pops.tsv
 !/analysis/source_patches.tsv
+!/analysis/native_symbols.tsv
