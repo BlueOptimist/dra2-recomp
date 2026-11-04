@@ -4,6 +4,14 @@
 # Needs Windows PowerShell 5.1 in STA mode (Play.cmd starts it that way).
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Windows.Forms
+# An app ID of its own, so the taskbar shows the launcher's icon rather than grouping it under PowerShell's
+try {
+    Add-Type -Namespace DRA2 -Name Shell -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("shell32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+public static extern int SetCurrentProcessExplicitAppUserModelID(string id);
+'@
+    $null = [DRA2.Shell]::SetCurrentProcessExplicitAppUserModelID('BlueOptimist.DRA2.Launcher')
+} catch { }
 trap { [Windows.MessageBox]::Show("The launcher stopped with an error:
 
 $_", 'DRA2 launcher', 'OK', 'Error') | Out-Null; exit 1 }
@@ -253,7 +261,9 @@ function Save-Settings { $settings | ConvertTo-Json | Set-Content $settingsFile 
         <DockPanel>
           <Button x:Name="closeBtn" DockPanel.Dock="Right" Style="{StaticResource Caption}" Content="&#x2715;"/>
           <Button x:Name="minBtn" DockPanel.Dock="Right" Style="{StaticResource Caption}" Content="&#x2014;"/>
-          <TextBlock Text="DRA2  ·  WINDOWS PORT LAUNCHER" Margin="16,0" VerticalAlignment="Center" FontSize="11"
+          <Image x:Name="titleIcon" DockPanel.Dock="Left" Width="18" Height="18" Margin="12,0,0,0"
+                 VerticalAlignment="Center" RenderOptions.BitmapScalingMode="HighQuality"/>
+          <TextBlock Text="DRA2  ·  WINDOWS PORT LAUNCHER" Margin="9,0" VerticalAlignment="Center" FontSize="11"
                      FontFamily="Segoe UI Semibold" Foreground="#5D74A8"/>
         </DockPanel>
       </Border>
@@ -395,7 +405,12 @@ function Save-Settings { $settings | ConvertTo-Json | Set-Content $settingsFile 
 $window = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $xaml))
 $icon = Join-Path $PSScriptRoot 'launcher\cover.ico'  # your own picture (launcher\make_icon.ps1 -Image), if made
 if (-not (Test-Path $icon)) { $icon = Join-Path $PSScriptRoot 'launcher\icon.ico' }
-try { $window.Icon = [Windows.Media.Imaging.BitmapFrame]::Create([Uri]$icon) } catch { }
+try {
+    $window.Icon = [Windows.Media.Imaging.BitmapFrame]::Create([Uri]$icon)
+    # the title bar's icon: the 48-pixel picture, which scales down to 18 more cleanly than the 256 one
+    $frames = [Windows.Media.Imaging.BitmapDecoder]::Create([Uri]$icon, 'None', 'OnLoad').Frames
+    $window.FindName('titleIcon').Source = ($frames | Sort-Object { [math]::Abs($_.PixelWidth - 48) } | Select-Object -First 1)
+} catch { }
 $ui = @{}
 $xaml.SelectNodes('//*[@*[local-name()="Name"]]') | ForEach-Object {
     $name = $_.Attributes | Where-Object { $_.LocalName -eq 'Name' } | Select-Object -First 1 -ExpandProperty Value
