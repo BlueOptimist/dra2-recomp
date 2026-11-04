@@ -977,15 +977,38 @@ static void combiners(void)
     IDirect3DDevice9_SetTextureStageState(d, 1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
 }
 
-/* Near-plane clipping. The NV2A clips triangles in homogeneous space; pretransformed vertices reach Direct3D 9
- * already divided by w, so a triangle with a corner behind the camera (w < 0) would be drawn mirrored through
- * infinity, a smear across the screen (the old west arena's ground, which passes under the camera). The vertex
- * program's outputs are x, y, z already divided by w (plus the viewport offset) and w, so x*w, y*w, z*w, w are
- * linear in clip space: those are interpolated along each edge that crosses z*w = 0 (the near plane, z = 0, which
- * also takes everything behind the camera), and every other output along with them. */
+/* Clipping. The NV2A clips triangles in homogeneous space; pretransformed vertices reach Direct3D 9 already divided
+ * by w, and it draws them as they are. Two kinds of triangle need clipping here:
+ *  - one with a corner behind the camera (w < 0) would be drawn mirrored through infinity, a smear across the screen
+ *    (the old west arena's ground, which passes under the camera): clipped at the near plane;
+ *  - one with a corner just in front of the camera lands millions of pixels off screen, beyond what the GPU's
+ *    rasterizer handles, and is drawn wrongly: the cave arena's outer shell, which surrounds the camera, came out as
+ *    a flat grey slab across the nearer walls. Clipped to a guard band around the screen.
+ * The vertex program's outputs are x, y, z already divided by w (plus the viewport offset) and w, so x*w, y*w, z*w,
+ * w are linear in clip space: each plane's distance is too, and the corners made on an edge get every output
+ * interpolated along it. */
 static GpuVertex clipped[0x20000];
 
-static float clip_distance(const GpuVertex *g) { return g->z / g->rhw; }
+#define GUARD_BAND 8192.0f  /* pixels either side of the origin, well inside what Direct3D 9 GPUs rasterize */
+
+/* distance to plane p (0 near, 1-4 the guard band's sides), >= 0 inside; meaningful once w > 0 (after plane 0) */
+static float clip_distance(const GpuVertex *g, int p)
+{
+    float w = 1.0f / g->rhw;
+    switch (p) {
+    case 0: return g->z * w;
+    case 1: return (g->x + GUARD_BAND) * w;
+    case 2: return (GUARD_BAND - g->x) * w;
+    case 3: return (g->y + GUARD_BAND) * w;
+    default: return (GUARD_BAND - g->y) * w;
+    }
+}
+
+static int needs_clipping(const GpuVertex *g)
+{
+    return !(clip_distance(g, 0) >= 0.0f) || g->x < -GUARD_BAND || g->x > GUARD_BAND || g->y < -GUARD_BAND ||
+           g->y > GUARD_BAND;
+}
 
 static unsigned lerp_color(unsigned a, unsigned b, float t)
 {
@@ -997,14 +1020,14 @@ static unsigned lerp_color(unsigned a, unsigned b, float t)
     return r;
 }
 
-static GpuVertex clip_point(const GpuVertex *a, const GpuVertex *b)
+static GpuVertex clip_point(const GpuVertex *a, const GpuVertex *b, int p)
 {
-    float da = clip_distance(a), db = clip_distance(b), t = da / (da - db);
+    float da = clip_distance(a, p), db = clip_distance(b, p), t = da / (da - db);
     float wa = 1.0f / a->rhw, wb = 1.0f / b->rhw, w = wa + (wb - wa) * t;
     GpuVertex g;
     g.x = (a->x * wa + (b->x * wb - a->x * wa) * t) / w;
     g.y = (a->y * wa + (b->y * wb - a->y * wa) * t) / w;
-    g.z = 0.0f;
+    g.z = (a->z * wa + (b->z * wb - a->z * wa) * t) / w;
     g.rhw = 1.0f / w;
     g.diffuse = lerp_color(a->diffuse, b->diffuse, t);
     g.specular = lerp_color(a->specular, b->specular, t);
@@ -1015,32 +1038,41 @@ static GpuVertex clip_point(const GpuVertex *a, const GpuVertex *b)
 }
 
 /* the n vertices in scratch, as triangles of the given type, clipped into a triangle list (back into scratch);
- * returns the number of triangles */
+ * returns the number of triangles. The corners keep their order, so the winding (and culling) stays the same. */
 static unsigned clip_triangles(D3DPRIMITIVETYPE type, unsigned *n)
 {
     unsigned in_tris = type == D3DPT_TRIANGLELIST ? *n / 3 : *n - 2, out = 0;
-    for (unsigned k = 0; k < in_tris && out + 6 <= sizeof clipped / sizeof *clipped; k++) {
-        const GpuVertex *tri[3];
+    for (unsigned k = 0; k < in_tris && out + 18 <= sizeof clipped / sizeof *clipped; k++) {
+        GpuVertex poly[2][8];  /* a triangle clipped by 5 planes has at most 8 corners */
+        int m = 3, cur = 0;
         if (type == D3DPT_TRIANGLELIST)
-            tri[0] = &scratch[3 * k], tri[1] = &scratch[3 * k + 1], tri[2] = &scratch[3 * k + 2];
+            poly[0][0] = scratch[3 * k], poly[0][1] = scratch[3 * k + 1], poly[0][2] = scratch[3 * k + 2];
         else if (type == D3DPT_TRIANGLEFAN)
-            tri[0] = &scratch[0], tri[1] = &scratch[k + 1], tri[2] = &scratch[k + 2];
+            poly[0][0] = scratch[0], poly[0][1] = scratch[k + 1], poly[0][2] = scratch[k + 2];
         else if (k & 1)  /* strips alternate their winding */
-            tri[0] = &scratch[k + 1], tri[1] = &scratch[k], tri[2] = &scratch[k + 2];
+            poly[0][0] = scratch[k + 1], poly[0][1] = scratch[k], poly[0][2] = scratch[k + 2];
         else
-            tri[0] = &scratch[k], tri[1] = &scratch[k + 1], tri[2] = &scratch[k + 2];
-        GpuVertex poly[4];
-        int m = 0;
-        for (int e = 0; e < 3; e++) {
-            const GpuVertex *a = tri[e], *b = tri[(e + 1) % 3];
-            int a_in = clip_distance(a) >= 0.0f, b_in = clip_distance(b) >= 0.0f;
-            if (a_in)
-                poly[m++] = *a;
-            if (a_in != b_in)
-                poly[m++] = clip_point(a, b);
+            poly[0][0] = scratch[k], poly[0][1] = scratch[k + 1], poly[0][2] = scratch[k + 2];
+        for (int p = 0; p < 5 && m >= 3; p++) {
+            const GpuVertex *in = poly[cur];
+            GpuVertex *next = poly[cur ^ 1];
+            int all_in = 1, made = 0;
+            for (int i = 0; i < m && all_in; i++)
+                all_in = clip_distance(&in[i], p) >= 0.0f;
+            if (all_in)
+                continue;
+            for (int e = 0; e < m; e++) {
+                const GpuVertex *a = &in[e], *b = &in[(e + 1) % m];
+                int a_in = clip_distance(a, p) >= 0.0f, b_in = clip_distance(b, p) >= 0.0f;
+                if (a_in)
+                    next[made++] = *a;
+                if (a_in != b_in)
+                    next[made++] = clip_point(a, b, p);
+            }
+            m = made, cur ^= 1;
         }
         for (int i = 1; i + 1 < m; i++)
-            clipped[out++] = poly[0], clipped[out++] = poly[i], clipped[out++] = poly[i + 1];
+            clipped[out++] = poly[cur][0], clipped[out++] = poly[cur][i], clipped[out++] = poly[cur][i + 1];
     }
     memcpy(scratch, clipped, out * sizeof *clipped);
     *n = out;
@@ -1088,10 +1120,10 @@ void gpu_draw(int primitive, const GpuVertex *v, unsigned count)
     if ((int)prims <= 0)
         return;
     if (type == D3DPT_TRIANGLELIST || type == D3DPT_TRIANGLESTRIP || type == D3DPT_TRIANGLEFAN) {
-        unsigned behind = 0;
-        for (unsigned i = 0; i < n && !behind; i++)
-            behind = !(clip_distance(&scratch[i]) >= 0.0f);
-        if (behind) {
+        unsigned outside = 0;
+        for (unsigned i = 0; i < n && !outside; i++)
+            outside = needs_clipping(&scratch[i]);
+        if (outside) {
             prims = clip_triangles(type, &n);
             type = D3DPT_TRIANGLELIST;
             if (!prims)
@@ -1220,6 +1252,7 @@ static void snapshot(void)
                     fwrite((unsigned char *)lr.pBits + y * lr.Pitch, desc.Width * 4, 1, f);
                 fclose(f);
                 printf("[gpu] frame %d saved to %s\n", frame, name);
+                fflush(stdout);  /* test runs end by killing the game */
             }
             IDirect3DSurface9_UnlockRect(copy);
         }
