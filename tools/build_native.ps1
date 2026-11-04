@@ -5,6 +5,15 @@
 $root = Split-Path -Parent $PSScriptRoot
 $mingw = & (Join-Path $PSScriptRoot 'find_mingw.ps1')
 if (-not $mingw) { exit 1 }
+# Python 3 makes the tables below (gen_native.py). Without it, Windows' "python" is often only a shortcut to the
+# Microsoft Store, which prints nothing useful here and runs nothing.
+$python = $null
+if (Get-Command python -ErrorAction SilentlyContinue) { $python = & python -c 'import sys; print(sys.version_info[0])' 2>$null }
+if ("$python".Trim() -ne '3') {
+    'Python 3 not found. Install it from https://www.python.org/downloads/'
+    '(tick "Add python.exe to PATH" in the installer), then rebuild the game.'
+    exit 1
+}
 $build = Join-Path $root 'decomp\build'
 $out = Join-Path $build 'native'
 New-Item -ItemType Directory -Force $out | Out-Null
@@ -28,7 +37,7 @@ $ports = foreach ($name in 'calls', 'crash', 'd3d8', 'dsound', 'gpu', 'nv2a', 'p
 & $cc -c -O1 -w (Join-Path $root 'decomp\port\kernel.c') -o (Join-Path $out 'kernel.obj')
 if ($LASTEXITCODE) { exit 1 }
 python -I (Join-Path $root 'tools\gen_native.py') (Join-Path $root 'decomp') $mingw
-if ($LASTEXITCODE) { exit 1 }
+if ($LASTEXITCODE -or -not $?) { 'gen_native.py failed: the game data (default.xbe) may be missing'; exit 1 }
 & $cc -c -O1 -w (Join-Path $root 'decomp\port\native.c') -o (Join-Path $out 'native.obj')
 if ($LASTEXITCODE) { exit 1 }
 & $cc -c (Join-Path $out 'native_tables.s') -o (Join-Path $out 'native_tables.obj')

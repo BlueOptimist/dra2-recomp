@@ -793,10 +793,10 @@ function Start-Tool([string]$title, [string[]]$arguments) {
     if ($script:tool -or $script:game) { return }
     New-Item -ItemType Directory -Force $logs | Out-Null
     $script:toolLog = Join-Path $logs 'tool.txt'
-    Set-Content $script:toolLog "$title...`r`n"
+    $script:toolErrors = Join-Path $logs 'tool_errors.txt'
     $ui.toolOutput.Visibility = 'Visible'
     $script:tool = Start-Process powershell -ArgumentList $arguments -WindowStyle Hidden -PassThru `
-        -RedirectStandardOutput $script:toolLog -RedirectStandardError (Join-Path $logs 'tool_errors.txt')
+        -RedirectStandardOutput $script:toolLog -RedirectStandardError $script:toolErrors
     $null = $script:tool.Handle
     $ui.rebuild.IsEnabled = $false; $ui.extract.IsEnabled = $false; $ui.playBtn.IsEnabled = $false
     Set-Status "$title..." 'This can take a few minutes.'
@@ -870,7 +870,9 @@ $timer.Add_Tick({
         else { Set-Status "Played for $minutes min." 'Ready to play again.' }
     }
     if ($script:tool) {
-        $text = Get-Content $script:toolLog -Raw -ErrorAction SilentlyContinue
+        # what the tool printed, then its errors (compilers and missing commands write those to stderr)
+        $text = (Get-Content $script:toolLog -Raw -ErrorAction SilentlyContinue) +
+                (Get-Content $script:toolErrors -Raw -ErrorAction SilentlyContinue)
         if ($text -ne $ui.toolOutput.Text) { $ui.toolOutput.Text = $text; $ui.toolOutput.ScrollToEnd() }
         if ($script:tool.HasExited) {
             $code = $script:tool.ExitCode
