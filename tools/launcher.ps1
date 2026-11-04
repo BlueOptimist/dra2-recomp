@@ -24,7 +24,7 @@ $backups = Join-Path $root 'save_backups'
 
 # ------------------------------------------------------------------------------------------------- settings --
 $settings = [ordered]@{
-    display = '2'                                 # 1..4 (window scale) or fullscreen
+    display = 'window'                            # window, borderless or fullscreen (DRA2_WINDOW)
     aspect = '4:3'                                # the picture's shape (DRA2_ASPECT): 4:3, 16:10, 16:9 or 21:9
     resolution = '1080'                           # lines drawn (DRA2_RESOLUTION): 480 (original), 720, 1080, 1440, 2160
     msaa = '4'                                    # anti-aliasing samples (DRA2_MSAA): 0 (original), 2, 4, 8
@@ -45,6 +45,8 @@ if (Test-Path $settingsFile) {
         foreach ($p in $saved.PSObject.Properties) { if ($settings.Contains($p.Name)) { $settings[$p.Name] = $p.Value } }
     } catch { }
 }
+# the old window sizes (1..4) are the window now: its size follows the resolution
+if ($settings.display -notin 'window', 'borderless', 'fullscreen') { $settings.display = 'window' }
 function Save-Settings { $settings | ConvertTo-Json | Set-Content $settingsFile -Encoding UTF8 }
 
 # ------------------------------------------------------------------------------------------------------ UI --
@@ -336,8 +338,8 @@ function Save-Settings { $settings | ConvertTo-Json | Set-Content $settingsFile 
         <!-- DISPLAY -->
         <StackPanel x:Name="pageDisplay" Visibility="Collapsed">
           <TextBlock Text="DISPLAY" Style="{StaticResource Heading}"/>
-          <TextBlock Style="{StaticResource Sub}">In the game, <Run Foreground="#FFB21E" FontWeight="Bold">Alt+Enter</Run> or <Run Foreground="#FFB21E" FontWeight="Bold">F11</Run> switches between the window and fullscreen. The window can be resized; black bars fill the sides.</TextBlock>
-          <TextBlock Text="DISPLAY MODE" Style="{StaticResource Label}"/>
+          <TextBlock Style="{StaticResource Sub}">In the game, <Run Foreground="#FFB21E" FontWeight="Bold">Alt+Enter</Run> or <Run Foreground="#FFB21E" FontWeight="Bold">F11</Run> switches between the window and full screen. The window can be resized; black bars fill the sides.</TextBlock>
+          <TextBlock Text="DISPLAY MODE  (the window opens at the resolution's size; borderless covers the screen; fullscreen has it to itself)" Style="{StaticResource Label}"/>
           <WrapPanel x:Name="displayModes"/>
           <TextBlock Text="RESOLUTION  (sharper 3D scenes, HUD and text; the game's own textures stay as they are)" Style="{StaticResource Label}"/>
           <WrapPanel x:Name="resolutionModes"/>
@@ -382,7 +384,7 @@ function Save-Settings { $settings | ConvertTo-Json | Set-Content $settingsFile 
               <TextBlock Style="{StaticResource Sub}" TextWrapping="Wrap" Width="340" HorizontalAlignment="Left" Margin="0,12,0,0"
                          Text="Keyboard: click a key, then press the new one; right-click clears it. Controller: click to pick the next button, right-click for the previous. The d-pad and sticks stay as they are."/>
               <TextBlock Style="{StaticResource Sub}" TextWrapping="Wrap" Width="340" HorizontalAlignment="Left" Margin="0,8,0,0"
-                         Text="Alt+Enter or F11 switches between the window and fullscreen."/>
+                         Text="Alt+Enter or F11 switches between the window and full screen."/>
             </StackPanel>
           </StackPanel>
         </StackPanel>
@@ -518,11 +520,10 @@ function Update-Overview {
 }
 
 # display mode chips, on Home and on Display, kept in step
-$modes = [ordered]@{ '1' = 'Window 1×'; '2' = 'Window 2×'; '3' = 'Window 3×'; '4' = 'Window 4×'; 'fullscreen' = 'Fullscreen' }
+$modes = [ordered]@{ 'window' = 'Windowed'; 'borderless' = 'Borderless'; 'fullscreen' = 'Fullscreen' }
 $chips = @()
 foreach ($panel in 'quickDisplay', 'displayModes') {
     foreach ($key in $modes.Keys) {
-        if ($panel -eq 'quickDisplay' -and $key -in '1', '4') { continue }
         $chip = New-Object Windows.Controls.RadioButton -Property @{ Content = $modes[$key]; Tag = $key; GroupName = $panel }
         $chip.Style = $window.FindResource('Chip')
         $chip.IsChecked = ($settings.display -eq $key)

@@ -22,11 +22,20 @@ static IDirect3D9 *d3d;
 static IDirect3DDevice9 *device;
 static int in_scene;
 
-/* Display: DRA2_WINDOW=1..4 opens a window at that multiple of the game's resolution (default 2), and
- * DRA2_WINDOW=fullscreen a borderless window covering the monitor. Alt+Enter and F11 switch between the two. The
- * picture keeps the game's 4:3 shape, with black bars, whatever the window's size. */
-static int fullscreen;
+/* Display: DRA2_WINDOW=window (the default) opens a window the size of the picture (DRA2_RESOLUTION), made smaller if
+ * the screen can't hold it; DRA2_WINDOW=borderless a borderless window covering the monitor; DRA2_WINDOW=fullscreen
+ * takes the monitor exclusively, at the desktop's own resolution and refresh rate. Alt+Enter and F11 switch between
+ * the window and the full-screen mode chosen (borderless when started in a window). The picture keeps its shape,
+ * with black bars, whatever the window's size. (1..4, the old window sizes, mean window.) */
+static int fullscreen;  /* the borderless window covers the monitor */
+static int exclusive;   /* the device has the monitor to itself (pp.Windowed FALSE) */
+static int exclusive_chosen, toggle_exclusive, device_lost;
+static D3DDISPLAYMODE desktop;
+static int synced;
 static WINDOWPLACEMENT windowed_placement = { sizeof(WINDOWPLACEMENT) };
+/* With the monitor to itself, the back buffer must be the size of a display mode, so the game draws into frame (the
+ * picture's size) instead, and each frame is scaled onto the back buffer (frame_resolved: frame, single-sampled). */
+static IDirect3DSurface9 *frame, *frame_depth, *frame_resolved;
 
 /* Widescreen: DRA2_ASPECT=16:9 (or 16:10, 21:9...; 4:3 is the game's own) draws a wider picture, not a stretched one.
  * The native build widens the game's camera projections and their culling by gpu_wide (port/native.c), so the game
@@ -125,19 +134,78 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     if (msg == WM_CLOSE || msg == WM_DESTROY)
         ExitProcess(0);
     if ((msg == WM_SYSKEYDOWN && wp == VK_RETURN && (lp & (1 << 29))) || (msg == WM_KEYDOWN && wp == VK_F11)) {
-        if (!(lp & (1 << 30)))  /* not a key repeat */
-            set_fullscreen(!fullscreen);
+        if (!(lp & (1 << 30))) {  /* not a key repeat */
+            if (exclusive_chosen)
+                toggle_exclusive = 1;  /* the device is reset between frames (gpu_present) */
+            else
+                set_fullscreen(!fullscreen);
+        }
         return 0;
     }
     if (msg == WM_SYSCHAR && wp == VK_RETURN)
         return 0;  /* no beep for Alt+Enter */
     if (msg == WM_SIZE)
         InvalidateRect(hwnd, 0, TRUE);  /* repaint the bars around the picture */
-    if (msg == WM_SETCURSOR && fullscreen && LOWORD(lp) == HTCLIENT) {
+    if (msg == WM_SETCURSOR && (fullscreen || exclusive) && LOWORD(lp) == HTCLIENT) {
         SetCursor(0);
         return TRUE;
     }
     return DefWindowProcA(hwnd, msg, wp, lp);
+}
+
+/* the exclusive mode's window: borderless over the monitor (Direct3D sizes it), the window's place kept for after */
+static void enter_exclusive_style(void)
+{
+    if (!fullscreen)
+        GetWindowPlacement(window, &windowed_placement);
+    fullscreen = 0;
+    SetWindowLongA(window, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+}
+
+static void leave_exclusive_style(void)
+{
+    SetWindowLongA(window, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_VISIBLE);
+    SetWindowPlacement(window, &windowed_placement);
+    SetWindowPos(window, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+    InvalidateRect(window, 0, TRUE);
+}
+
+/* in a window, the back buffer is the picture (multisampled with DRA2_MSAA); with the monitor to itself, it's the
+ * desktop's mode, and the picture is frame (device_setup) */
+static void present_parameters(D3DPRESENT_PARAMETERS *pp, int whole_monitor)
+{
+    memset(pp, 0, sizeof *pp);
+    pp->BackBufferFormat = D3DFMT_X8R8G8B8;
+    pp->BackBufferCount = 1;
+    pp->SwapEffect = D3DSWAPEFFECT_DISCARD;
+    pp->hDeviceWindow = window;
+    pp->PresentationInterval = synced ? D3DPRESENT_INTERVAL_ONE : D3DPRESENT_INTERVAL_IMMEDIATE;
+    if (whole_monitor) {
+        pp->BackBufferWidth = desktop.Width;
+        pp->BackBufferHeight = desktop.Height;
+        pp->FullScreen_RefreshRateInHz = desktop.RefreshRate;
+        pp->Windowed = FALSE;
+    } else {
+        pp->BackBufferWidth = render_width;
+        pp->BackBufferHeight = render_height;
+        pp->Windowed = TRUE;
+        pp->EnableAutoDepthStencil = TRUE;
+        pp->AutoDepthStencilFormat = D3DFMT_D24S8;
+        pp->MultiSampleType = msaa;
+    }
+}
+
+static int device_setup(void);
+
+/* the surface holding the finished picture: frame with the monitor to itself, else the back buffer (one reference) */
+static int get_picture(IDirect3DSurface9 **surface)
+{
+    if (frame) {
+        IDirect3DSurface9_AddRef(frame);
+        *surface = frame;
+        return 1;
+    }
+    return IDirect3DDevice9_GetBackBuffer(device, 0, 0, D3DBACKBUFFER_TYPE_MONO, surface) == D3D_OK;
 }
 
 /* the window and a device rendering at the game's resolution */
@@ -145,7 +213,6 @@ int gpu_open(unsigned width, unsigned height)
 {
     char mode[16] = "";
     GetEnvironmentVariableA("DRA2_WINDOW", mode, sizeof mode);
-    int scale = mode[0] >= '1' && mode[0] <= '4' && !mode[1] ? mode[0] - '0' : 2;
     WNDCLASSA wc = { 0 };
     wc.lpfnWndProc = window_proc;
     wc.hInstance = GetModuleHandleA(0);
@@ -169,11 +236,26 @@ int gpu_open(unsigned width, unsigned height)
         printf("[gpu] resolution: %ux%u, the game's %ux%u scaled by %.3f\n", render_width, render_height, buffer_width,
                buffer_height, scale_y);
     width = buffer_width;
-    RECT r = { 0, 0, (LONG)width * scale, (LONG)height * scale };
+    /* the window: the picture's size, scaled down to what the screen's work area holds with the window's frame */
+    MONITORINFO mi = { sizeof mi };
+    GetMonitorInfoA(MonitorFromPoint((POINT){ 0, 0 }, MONITOR_DEFAULTTOPRIMARY), &mi);
+    RECT border = { 0, 0, 0, 0 };
+    AdjustWindowRect(&border, WS_OVERLAPPEDWINDOW, FALSE);
+    LONG room_w = (mi.rcWork.right - mi.rcWork.left) - (border.right - border.left);
+    LONG room_h = (mi.rcWork.bottom - mi.rcWork.top) - (border.bottom - border.top);
+    LONG client_w = (LONG)render_width, client_h = (LONG)render_height;
+    if (client_w > room_w || client_h > room_h) {
+        if (client_w * room_h > client_h * room_w)
+            client_h = client_h * room_w / client_w, client_w = room_w;
+        else
+            client_w = client_w * room_h / client_h, client_h = room_h;
+    }
+    RECT r = { 0, 0, client_w, client_h };
     AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
     window = CreateWindowExA(0, wc.lpszClassName, "Digimon Rumble Arena 2", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
                              CW_USEDEFAULT, CW_USEDEFAULT, r.right - r.left, r.bottom - r.top, 0, 0, wc.hInstance, 0);
-    if (!_stricmp(mode, "fullscreen"))
+    exclusive_chosen = !_stricmp(mode, "fullscreen");
+    if (!_stricmp(mode, "borderless"))
         set_fullscreen(1);
 
     d3d = Direct3DCreate9(D3D_SDK_VERSION);
@@ -181,47 +263,45 @@ int gpu_open(unsigned width, unsigned height)
         printf("[gpu] Direct3DCreate9 failed\n");
         return 0;
     }
-    D3DPRESENT_PARAMETERS pp = { 0 };
-    pp.BackBufferWidth = render_width;
-    pp.BackBufferHeight = render_height;
-    pp.BackBufferFormat = D3DFMT_X8R8G8B8;
-    pp.BackBufferCount = 1;
-    pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
-    pp.hDeviceWindow = window;
-    pp.Windowed = TRUE;
-    pp.EnableAutoDepthStencil = TRUE;
-    pp.AutoDepthStencilFormat = D3DFMT_D24S8;
+    IDirect3D9_GetAdapterDisplayMode(d3d, D3DADAPTER_DEFAULT, &desktop);
     /* the game paces itself (its frame limiter, 60 a second). VSync: DRA2_VSYNC=1 also waits for the display's refresh
      * to show each frame, so no frame is shown torn across two; unset or 0 shows it at once. */
     char vsync[8] = "";
     GetEnvironmentVariableA("DRA2_VSYNC", vsync, sizeof vsync);
-    int synced = atoi(vsync) > 0;
-    pp.PresentationInterval = synced ? D3DPRESENT_INTERVAL_ONE : D3DPRESENT_INTERVAL_IMMEDIATE;
+    synced = atoi(vsync) > 0;
     msaa = msaa_setting(d3d);
-    pp.MultiSampleType = msaa;
+    D3DPRESENT_PARAMETERS pp;
+    if (exclusive_chosen)
+        enter_exclusive_style();
+    present_parameters(&pp, exclusive_chosen);
     HRESULT hr = IDirect3D9_CreateDevice(d3d, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, window,
                                          D3DCREATE_HARDWARE_VERTEXPROCESSING | D3DCREATE_FPU_PRESERVE, &pp, &device);
     if (FAILED(hr))
         hr = IDirect3D9_CreateDevice(d3d, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, window,
                                      D3DCREATE_SOFTWARE_VERTEXPROCESSING | D3DCREATE_FPU_PRESERVE, &pp, &device);
+    if (FAILED(hr) && exclusive_chosen) {  /* no exclusive mode: the borderless window instead */
+        printf("[gpu] fullscreen failed (%08lx): borderless instead\n", (unsigned long)hr);
+        exclusive_chosen = 0;
+        leave_exclusive_style();
+        set_fullscreen(1);
+        present_parameters(&pp, 0);
+        hr = IDirect3D9_CreateDevice(d3d, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, window,
+                                     D3DCREATE_HARDWARE_VERTEXPROCESSING | D3DCREATE_FPU_PRESERVE, &pp, &device);
+    }
     if (FAILED(hr)) {
         printf("[gpu] CreateDevice failed: %08lx\n", (unsigned long)hr);
         return 0;
     }
-    printf("[gpu] Direct3D 9 device %ux%u%s\n", render_width, render_height, synced ? ", vsync" : "");
-    if (msaa) {
+    exclusive = exclusive_chosen;
+    printf("[gpu] Direct3D 9 device %ux%u%s", render_width, render_height, synced ? ", vsync" : "");
+    if (exclusive)
+        printf(", fullscreen on %ux%u at %u Hz", desktop.Width, desktop.Height, desktop.RefreshRate);
+    printf("\n");
+    if (msaa)
         printf("[gpu] anti-aliasing: %dx MSAA\n", (int)msaa);
-        IDirect3DDevice9_SetRenderState(device, D3DRS_MULTISAMPLEANTIALIAS, TRUE);
-    }
-    IDirect3DDevice9_SetRenderState(device, D3DRS_CULLMODE, D3DCULL_NONE);
-    IDirect3DDevice9_SetRenderState(device, D3DRS_LIGHTING, FALSE);
-    IDirect3DDevice9_SetRenderState(device, D3DRS_ZENABLE, D3DZB_TRUE);
-    for (DWORD s = 0; s < 4; s++) {
-        IDirect3DDevice9_SetSamplerState(device, s, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
-        IDirect3DDevice9_SetSamplerState(device, s, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
-        /* the game sets linear mip filtering on every stage it uses (D3DTSS_MIPFILTER); textures without mipmaps
-         * (render targets, linear ones) are unaffected */
-        IDirect3DDevice9_SetSamplerState(device, s, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+    if (!device_setup()) {
+        printf("[gpu] couldn't make the fullscreen picture\n");
+        return 0;
     }
     return 1;
 }
@@ -773,10 +853,17 @@ static DWORD d3d_blend(DWORD gl)
     return D3DBLEND_ONE;
 }
 
+/* the game's render states as last set: a reset device (fullscreen, Alt+Tab) gets them back (device_setup), since
+ * the game only sends a state when it changes */
+static unsigned render_state_values[0x40];
+static unsigned char render_state_known[0x40];
+
 void gpu_render_state(unsigned method, unsigned value)
 {
     if (!device)
         return;
+    if (method >= 0x300 && method < 0x400)
+        render_state_values[(method - 0x300) / 4] = value, render_state_known[(method - 0x300) / 4] = 1;
     IDirect3DDevice9 *d = device;
     switch (method) {
     case 0x300: IDirect3DDevice9_SetRenderState(d, D3DRS_ALPHATESTENABLE, value != 0); break;
@@ -1210,9 +1297,12 @@ static unsigned clip_triangles(D3DPRIMITIVETYPE type, unsigned *n)
  * BORDERCOLOR at 29); the library's draw-time code that would send it to the GPU doesn't run here. Without it every
  * texture wraps, and a shadow projected onto the ground repeats across it. The Xbox values are Direct3D 9's
  * (1 wrap, 2 mirror, 3 clamp, 4 border), plus 5 (clamp to edge), which is Direct3D 9's clamp. */
+static DWORD addressing_set[4][4];  /* what the device has, + 1 (0: unknown, after a reset) */
+static float mip_bias_set = -1.0f;
+
 static void set_addressing(void)
 {
-    static DWORD current[4][4];
+    DWORD (*current)[4] = addressing_set;
     const DWORD *state = (const DWORD *)0x238560;
     for (DWORD s = 0; s < 4; s++, state += 32) {
         DWORD want[4] = { state[0], state[1], state[2], state[29] };
@@ -1234,7 +1324,8 @@ static void set_addressing(void)
  * by log2 of the scale, so they read the mip level the Xbox did; 3D keeps the sharper ones. */
 static void set_mip_bias(int two_d)
 {
-    static float current = -1.0f, bias_2d = -1.0f;
+    static float bias_2d = -1.0f;
+    float current = mip_bias_set;
     if (bias_2d < 0.0f) {  /* log2(scale_y): ln s = 2 (y + y^3/3 + y^5/5 + ...), y = (s - 1) / (s + 1) */
         float s = scale_y > 1.0f ? scale_y : 1.0f, octaves = 0.0f;
         while (s >= 2.0f)
@@ -1245,7 +1336,7 @@ static void set_mip_bias(int two_d)
     float bias = two_d && !drawing_into ? bias_2d : 0.0f;
     if (bias == current)
         return;
-    current = bias;
+    mip_bias_set = bias;
     for (DWORD s = 0; s < 4; s++)
         IDirect3DDevice9_SetSamplerState(device, s, D3DSAMP_MIPMAPLODBIAS, *(DWORD *)&bias);
 }
@@ -1412,7 +1503,7 @@ static void snapshot(void)
     snprintf(name, sizeof name, path, frame);
     IDirect3DSurface9 *back = 0, *copy = 0;
     D3DSURFACE_DESC desc;
-    if (FAILED(IDirect3DDevice9_GetBackBuffer(device, 0, 0, D3DBACKBUFFER_TYPE_MONO, &back)))
+    if (!get_picture(&back))
         return;
     IDirect3DSurface9_GetDesc(back, &desc);
     if (desc.MultiSampleType != D3DMULTISAMPLE_NONE) {  /* resolved into a single-sampled copy first */
@@ -1461,7 +1552,10 @@ unsigned gpu_frame(void) { return texture_frame; }
  * blends each line with its neighbours. Without it the art's fine horizontal detail, such as the stripes in the HUD
  * panels, is much harsher than on the console. This does the same on the finished frame, with weights 1-2-1.
  * DRA2_SOFT=0 turns it off. */
-static void soft_display(void)
+static int get_picture(IDirect3DSurface9 **surface);
+
+/* release: before a device reset, its default-pool texture and state block go (set up again on the next frame) */
+static void soft_display(int release)
 {
     static int state = -1;  /* -1 not set up, 0 off or failed, 1 on */
     static IDirect3DTexture9 *copy;
@@ -1470,9 +1564,20 @@ static void soft_display(void)
     static float line;  /* one line, in texture coordinates */
     IDirect3DSurface9 *back = 0, *target = 0, *copy_surface = 0;
     D3DSURFACE_DESC desc;
+    if (release) {
+        if (copy)
+            IDirect3DTexture9_Release(copy), copy = 0;
+        if (saved)
+            IDirect3DStateBlock9_Release(saved), saved = 0;
+        if (shader)
+            IDirect3DPixelShader9_Release(shader), shader = 0;
+        if (state == 1)
+            state = -1;
+        return;
+    }
     if (state == 0)
         return;
-    if (IDirect3DDevice9_GetBackBuffer(device, 0, 0, D3DBACKBUFFER_TYPE_MONO, &back) != D3D_OK)
+    if (!get_picture(&back))
         return;
     IDirect3DSurface9_GetDesc(back, &desc);
     if (state == -1) {
@@ -1502,7 +1607,9 @@ static void soft_display(void)
         if (errors)
             ID3D10Blob_Release(errors);
         line = 1.0f / (float)buffer_height;  /* the game's line, several of the back buffer's at a higher resolution */
-        printf("[gpu] soft display %s\n", state ? "on" : v[0] == '0' ? "off (DRA2_SOFT=0)" : "unavailable");
+        static int told;
+        if (!told++)
+            printf("[gpu] soft display %s\n", state ? "on" : v[0] == '0' ? "off (DRA2_SOFT=0)" : "unavailable");
         if (!state) {
             IDirect3DSurface9_Release(back);
             return;
@@ -1557,19 +1664,126 @@ static void soft_display(void)
     IDirect3DSurface9_Release(back);
 }
 
+/* ------------------------------------------------------------------------------------ fullscreen, resets -- */
+/* A device that has the monitor to itself is lost when another program takes it (Alt+Tab), and is reset to come back,
+ * as it is to switch between it and the window. Reset needs everything in the default pool released first: the
+ * picture, the game's render targets (made again when next drawn into), the soft display's copy, state blocks. The
+ * reset device starts from default states, so device_setup sets them again, the game's own included. */
+static void release_default(void)
+{
+    soft_display(1);
+    IDirect3DSurface9 **surfaces[] = { &frame, &frame_depth, &frame_resolved, &back_buffer, &back_depth, &target_depth };
+    for (unsigned i = 0; i < sizeof surfaces / sizeof *surfaces; i++)
+        if (*surfaces[i])
+            IDirect3DSurface9_Release(*surfaces[i]), *surfaces[i] = 0;
+    for (int s = 0; s < 4; s++)
+        for (int i = 0; i < target_count; i++)
+            if (bound[s].texture == targets[i].texture)
+                bound[s].texture = 0;
+    for (int i = 0; i < target_count; i++)
+        IDirect3DTexture9_Release(targets[i].texture);
+    target_count = 0;
+    drawing_into = 0;
+    has_depth = 1;
+}
+
+static int device_setup(void)
+{
+    IDirect3DDevice9 *d = device;
+    if (exclusive) {
+        if (FAILED(IDirect3DDevice9_CreateRenderTarget(d, render_width, render_height, D3DFMT_X8R8G8B8, msaa, 0, FALSE,
+                                                       &frame, 0)) ||
+            FAILED(IDirect3DDevice9_CreateDepthStencilSurface(d, render_width, render_height, D3DFMT_D24S8, msaa, 0,
+                                                              TRUE, &frame_depth, 0)) ||
+            (msaa && FAILED(IDirect3DDevice9_CreateRenderTarget(d, render_width, render_height, D3DFMT_X8R8G8B8,
+                                                                D3DMULTISAMPLE_NONE, 0, FALSE, &frame_resolved, 0))))
+            return 0;
+        IDirect3DDevice9_SetRenderTarget(d, 0, frame);
+        IDirect3DDevice9_SetDepthStencilSurface(d, frame_depth);
+    }
+    if (msaa)
+        IDirect3DDevice9_SetRenderState(d, D3DRS_MULTISAMPLEANTIALIAS, TRUE);
+    IDirect3DDevice9_SetRenderState(d, D3DRS_CULLMODE, D3DCULL_NONE);
+    IDirect3DDevice9_SetRenderState(d, D3DRS_LIGHTING, FALSE);
+    IDirect3DDevice9_SetRenderState(d, D3DRS_ZENABLE, D3DZB_TRUE);
+    for (DWORD s = 0; s < 4; s++) {
+        IDirect3DDevice9_SetSamplerState(d, s, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+        IDirect3DDevice9_SetSamplerState(d, s, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+        /* the game sets linear mip filtering on every stage it uses (D3DTSS_MIPFILTER); textures without mipmaps
+         * (render targets, linear ones) are unaffected */
+        IDirect3DDevice9_SetSamplerState(d, s, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+        IDirect3DDevice9_SetTexture(d, s, (IDirect3DBaseTexture9 *)bound[s].texture);
+    }
+    memset(addressing_set, 0, sizeof addressing_set);
+    mip_bias_set = -1.0f;
+    for (unsigned i = 0; i < sizeof render_state_known; i++)
+        if (render_state_known[i])
+            gpu_render_state(0x300 + 4 * i, render_state_values[i]);
+    return 1;
+}
+
+/* a reset into the exclusive mode (whole_monitor) or the window; if the exclusive one fails, the window */
+static void reset_device(int whole_monitor)
+{
+    D3DPRESENT_PARAMETERS pp;
+    int styled = exclusive;  /* the window has the exclusive mode's style */
+    release_default();
+    if (whole_monitor && !styled)
+        enter_exclusive_style(), styled = 1;
+    present_parameters(&pp, whole_monitor);
+    HRESULT hr = IDirect3DDevice9_Reset(device, &pp);
+    if (FAILED(hr) && whole_monitor) {
+        printf("[gpu] fullscreen failed (%08lx): window instead\n", (unsigned long)hr);
+        whole_monitor = 0;
+        present_parameters(&pp, 0);
+        hr = IDirect3DDevice9_Reset(device, &pp);
+    }
+    if (!whole_monitor && styled)
+        leave_exclusive_style();
+    exclusive = whole_monitor;
+    device_lost = FAILED(hr);  /* tried again on the next frame */
+    if (!device_lost && !device_setup())
+        printf("[gpu] couldn't make the fullscreen picture\n");
+    printf("[gpu] device reset: %s%s\n", exclusive ? "fullscreen" : "window", device_lost ? " (failed, will retry)" : "");
+}
+
 void gpu_present(void)
 {
     texture_frame++;
+    if (device && device_lost) {  /* back when the device can be reset (Alt+Tab back to the game) */
+        HRESULT hr = IDirect3DDevice9_TestCooperativeLevel(device);
+        if (hr == D3DERR_DEVICENOTRESET)
+            reset_device(exclusive_chosen && !toggle_exclusive ? 1 : exclusive);
+        else if (hr == D3DERR_DEVICELOST)
+            Sleep(20);
+        else
+            device_lost = 0;
+        in_scene = 0;
+        pump_messages();
+        return;
+    }
+    if (device && toggle_exclusive) {
+        toggle_exclusive = 0;
+        if (in_scene)
+            IDirect3DDevice9_EndScene(device), in_scene = 0;
+        exclusive_chosen = 1;
+        reset_device(!exclusive);
+        pump_messages();
+        return;
+    }
     if (device) {
         if (in_scene) {
             IDirect3DDevice9_EndScene(device);
             in_scene = 0;
         }
-        soft_display();
+        soft_display(0);
         snapshot();
-        /* the largest rectangle of the picture's shape (4:3, or wider with DRA2_ASPECT) in the middle of the window */
+        /* the largest rectangle of the picture's shape (4:3, or wider with DRA2_ASPECT) in the middle of the window, or
+         * of the monitor */
         RECT client, picture;
         GetClientRect(window, &client);
+        if (exclusive)
+            client.right = (LONG)desktop.Width, client.bottom = (LONG)desktop.Height;
         LONG w = client.right, h = client.bottom;
         if (w * (LONG)buffer_height > h * (LONG)buffer_width)
             w = h * (LONG)buffer_width / (LONG)buffer_height;
@@ -1579,7 +1793,25 @@ void gpu_present(void)
         picture.top = (client.bottom - h) / 2;
         picture.right = picture.left + w;
         picture.bottom = picture.top + h;
-        IDirect3DDevice9_Present(device, 0, w > 0 && h > 0 ? &picture : 0, 0, 0);
+        HRESULT hr;
+        if (exclusive) {  /* frame (resolved if multisampled), scaled into the middle of the black back buffer */
+            IDirect3DSurface9 *back = 0, *source = frame;
+            if (IDirect3DDevice9_GetBackBuffer(device, 0, 0, D3DBACKBUFFER_TYPE_MONO, &back) == D3D_OK) {
+                IDirect3DDevice9_ColorFill(device, back, 0, D3DCOLOR_XRGB(0, 0, 0));
+                if (frame_resolved) {
+                    IDirect3DDevice9_StretchRect(device, frame, 0, frame_resolved, 0, D3DTEXF_NONE);
+                    source = frame_resolved;
+                }
+                IDirect3DDevice9_StretchRect(device, source, 0, back, &picture, D3DTEXF_LINEAR);
+                IDirect3DSurface9_Release(back);
+            }
+            hr = IDirect3DDevice9_Present(device, 0, 0, 0, 0);
+        } else
+            hr = IDirect3DDevice9_Present(device, 0, w > 0 && h > 0 ? &picture : 0, 0, 0);
+        if (hr == D3DERR_DEVICELOST) {
+            device_lost = 1;
+            printf("[gpu] device lost\n");
+        }
     }
     pump_messages();
 }
