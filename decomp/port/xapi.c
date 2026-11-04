@@ -436,16 +436,18 @@ int __stdcall XAPILIB__ReadFile(void *h, void *buffer, DWORD size, DWORD *read, 
 {
     int ok = ReadFile(h, buffer, size, read, overlapped);
     static int logged;
-    if (overlapped && ((DWORD *)overlapped)[2] >= 0x10000000u && logged++ < 2) {
+    /* a read that starts at or past the end of its file (streams.res, the music and speech, is 588 MB: its last
+     * stream ends 880 bytes into the final sector the game reads, which is fine) */
+    if (overlapped && ((DWORD *)overlapped)[2] >= GetFileSize(h, 0) && logged++ < 2) {
         void port_print_chain(const char *tag);
         DWORD error = ok ? 0 : GetLastError();
-        printf("[xapi] ReadFile(%p, %lu bytes) at offset %08lx: past any file (from %p)\n", h, (unsigned long)size,
+        printf("[xapi] ReadFile(%p, %lu bytes) at offset %08lx: past the end of the file (from %p)\n", h, (unsigned long)size,
                (unsigned long)((DWORD *)overlapped)[2], __builtin_return_address(0));
         extern DWORD *PTR_DAT_002edcfc;  /* the resource header being read */
         DWORD *hd = PTR_DAT_002edcfc;
         printf("[xapi]   resource header %p: %08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx\n", (void *)hd,
                hd[0], hd[1], hd[2], hd[3], hd[4], hd[5], hd[6], hd[7], hd[8], hd[9]);
-        port_print_chain("fatal");
+        port_print_chain("xapi");
         SetLastError(error);
     }
     if (!ok) {
@@ -830,12 +832,21 @@ static int key(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
 
 /* DRA2_INPUT=<frame>:<button>[,<frame>:<button>...]: scripted presses on player 1, for testing without a window in
  * front (the frame numbers are those of DRA2_SNAPSHOT); each press is held for 8 frames. Buttons: start back a b x y
- * up down left right. Example: DRA2_INPUT=1500:start,1700:a */
+ * up down left right. <from>-<to>/<every>:<button> presses it every <every> frames from <from> to <to>, for
+ * fighting. Example: DRA2_INPUT=1500:start,1700:a,4000-9000/20:x */
 unsigned gpu_frame(void);
+
+static DWORD script_number(const char **p)
+{
+    DWORD n = 0;
+    while (**p >= '0' && **p <= '9')
+        n = n * 10 + (DWORD)(*(*p)++ - '0');
+    return n;
+}
 
 static void script_pad(WIN_STATE *st)
 {
-    static struct { DWORD frame; WORD bit; } presses[64];
+    static struct { DWORD frame, until, every; WORD bit; } presses[256];
     static int count = -1;
     static DWORD packets, last;
     if (count < 0) {
@@ -843,14 +854,18 @@ static void script_pad(WIN_STATE *st)
             { "up", 0x0001 }, { "down", 0x0002 }, { "left", 0x0004 }, { "right", 0x0008 }, { "start", 0x0010 },
             { "back", 0x0020 }, { "a", 0x1000 }, { "b", 0x2000 }, { "x", 0x4000 }, { "y", 0x8000 },
         };
-        char v[1024];
+        static char v[8192];
         DWORD n = GetEnvironmentVariableA("DRA2_INPUT", v, sizeof v);
         count = 0;
+        if (n >= sizeof v)
+            printf("[xapi] DRA2_INPUT is longer than %u characters: ignored\n", (unsigned)sizeof v - 1);
         const char *p = n && n < sizeof v ? v : "";
-        while (*p && count < 64) {
-            DWORD frame = 0;
-            while (*p >= '0' && *p <= '9')
-                frame = frame * 10 + (DWORD)(*p++ - '0');
+        while (*p && count < (int)(sizeof presses / sizeof *presses)) {
+            DWORD frame = script_number(&p), until = frame, every = 0;
+            if (*p == '-')
+                p++, until = script_number(&p);
+            if (*p == '/')
+                p++, every = script_number(&p);
             if (*p++ != ':')
                 break;
             unsigned len = 0;
@@ -860,8 +875,10 @@ static void script_pad(WIN_STATE *st)
                 unsigned i = 0;
                 while (i < len && names[k].name[i] == p[i])
                     i++;
-                if (i == len && !names[k].name[i])
-                    presses[count].frame = frame, presses[count++].bit = names[k].bit;
+                if (i == len && !names[k].name[i]) {
+                    presses[count].frame = frame, presses[count].until = until, presses[count].every = every;
+                    presses[count++].bit = names[k].bit;
+                }
             }
             p += len;
             if (*p == ',')
@@ -870,7 +887,8 @@ static void script_pad(WIN_STATE *st)
     }
     DWORD now = gpu_frame(), held = 0;
     for (int k = 0; k < count; k++)
-        if (now >= presses[k].frame && now < presses[k].frame + 8)
+        if (now >= presses[k].frame && now < presses[k].until + 8 &&
+            (now - presses[k].frame) % (presses[k].every ? presses[k].every : 0xffffffffu) < 8)
             held |= presses[k].bit;
     if (held != last)
         packets++, last = held;

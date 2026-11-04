@@ -460,6 +460,24 @@ __declspec(dllexport) void native_main(void)
         memcpy((char *)0x29631c, arena, arena_length + 1);
     } else if (arena)
         printf("[native] DRA2_ARENA is longer than 24 characters: ignored\n");
+    /* Music and speech: the streamer (0x169140) starts a read of streams.res, then marks it pending (0x310144 = 1).
+     * On the Xbox the disc read always finishes later and its callback (0x168a40) clears the mark; here an overlapped
+     * read can finish inside the call, the callback runs first, and the mark set after it is never cleared: the
+     * stream stalls before its first block and nothing is heard. The mark is now set before the call (the same 35
+     * bytes, reordered; eax holds the read size throughout). */
+    static const unsigned char stream_read[35] = {
+        0xc6, 0x05, 0x44, 0x01, 0x31, 0x00, 0x01,  /* mov byte [0x310144], 1 */
+        0x8b, 0x0d, 0x14, 0x01, 0x31, 0x00,        /* mov ecx, [0x310114] (the streams.res reader) */
+        0x8b, 0x11,                                /* mov edx, [ecx] */
+        0x68, 0xcc, 0xde, 0x2e, 0x00,              /* push 0x2edecc (the callback) */
+        0x50,                                      /* push eax (bytes) */
+        0xa1, 0x3c, 0x01, 0x31, 0x00,              /* mov eax, [0x31013c] (offset) */
+        0x68, 0xf0, 0x00, 0x30, 0x00,              /* push 0x3000f0 (buffer) */
+        0x50,                                      /* push eax */
+        0xff, 0x52, 0x14,                          /* call [edx+0x14] */
+    };
+    if (((unsigned char *)0x1691af)[0] == 0xff && ((unsigned char *)0x1691b2)[0] == 0xc6)
+        memcpy((void *)0x169196, stream_read, sizeof stream_read);
     /* what the Xbox startup thread (0x126fac) runs before main: process setup (heaps), the runtime's _rtinit and
      * _cinit (which runs the startup tables, C initializers first) */
     for (unsigned k = 0; k < sizeof startup / sizeof startup[0]; k++) {
