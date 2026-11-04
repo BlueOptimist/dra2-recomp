@@ -1,4 +1,4 @@
-# Draw tools/launcher/icon.ico: a big yellow-to-orange "2" with a red rim and dark outline, on deep blue with light
+# Draw tools/launcher/icon.ico: "DRA2" in yellow-to-orange with a red rim and dark outline, on deep blue with light
 # streaks bursting from the middle. Original art in the cover's spirit: no logo or wordmark from the game. Sizes 256,
 # 48, 32 and 16, stored as PNG (Windows Vista and later); at 16 only the "2" on blue, so it stays readable.
 # Usage: powershell -File tools\launcher\make_icon.ps1
@@ -76,12 +76,32 @@ function Draw([int]$size) {
         $g.FillPath($glow, $core)
     }
     $g.ResetClip()
-    # the "2": big, leaning forward, yellow to orange, with a red rim inside a dark outline
+    # the text, leaning forward, yellow to orange, with a red rim inside a dark outline: "DRA" and a bigger "2", sitting on one baseline and centred; at 16 px only the "2" (four letters don't fit)
+    $family = New-Object Drawing.FontFamily 'Arial Black'
+    $italic = [int][Drawing.FontStyle]::Italic
+    $origin = New-Object Drawing.PointF 0, 0
+    $two = New-Object Drawing.Drawing2D.GraphicsPath
     $text = New-Object Drawing.Drawing2D.GraphicsPath
-    $format = New-Object Drawing.StringFormat; $format.Alignment = 'Center'; $format.LineAlignment = 'Center'
-    $em = if ($size -le 16) { 250 } elseif ($size -le 32) { 236 } else { 218 }
-    $text.AddString('2', (New-Object Drawing.FontFamily 'Arial Black'), [int][Drawing.FontStyle]::Italic, [single]($em * $s),
-        (New-Object Drawing.RectangleF ([single](-2 * $s)), ([single](6 * $s)), ([single]$size), ([single]$size)), $format)
+    if ($size -le 16) {
+        $two.AddString('2', $family, $italic, [single](250 * $s), $origin, [Drawing.StringFormat]::GenericTypographic)
+        $text.AddPath($two, $false)
+    } else {
+        $dra = New-Object Drawing.Drawing2D.GraphicsPath
+        $dra.AddString('DRA', $family, $italic, [single](92 * $s), $origin, [Drawing.StringFormat]::GenericTypographic)
+        $two.AddString('2', $family, $italic, [single](190 * $s), $origin, [Drawing.StringFormat]::GenericTypographic)
+        $db = $dra.GetBounds(); $tb = $two.GetBounds()
+        $place = New-Object Drawing.Drawing2D.Matrix  # "2" just after "DRA", bottoms level
+        $place.Translate([single]($db.Right - $tb.Left - 4 * $s), [single]($db.Bottom - $tb.Bottom))
+        $two.Transform($place)
+        $text.AddPath($dra, $false); $text.AddPath($two, $false)
+    }
+    $tb = $text.GetBounds()
+    $fit = [math]::Min(1.0, (212 * $s) / $tb.Width)  # leave room for the outline inside the tile
+    $shrink = New-Object Drawing.Drawing2D.Matrix; $shrink.Scale([single]$fit, [single]$fit)
+    $text.Transform($shrink); $tb = $text.GetBounds()
+    $centre = New-Object Drawing.Drawing2D.Matrix
+    $centre.Translate([single](($size - $tb.Width) / 2 - $tb.Left), [single](($size - $tb.Height) / 2 - $tb.Top + 2 * $s))
+    $text.Transform($centre)
     if ($size -gt 16) {  # a drop shadow
         $shadow = $text.Clone()
         $shift = New-Object Drawing.Drawing2D.Matrix; $shift.Translate([single](7 * $s), [single](8 * $s))
