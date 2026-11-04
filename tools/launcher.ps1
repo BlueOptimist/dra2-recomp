@@ -26,6 +26,7 @@ $backups = Join-Path $root 'save_backups'
 $settings = [ordered]@{
     display = '2'                                 # 1..4 (window scale) or fullscreen
     aspect = '4:3'                                # the picture's shape (DRA2_ASPECT): 4:3, 16:10, 16:9 or 21:9
+    resolution = '1080'                           # lines drawn (DRA2_RESOLUTION): 480 (original), 720, 1080, 1440, 2160
     soft = $true                                  # the Xbox's soft display (DRA2_SOFT)
     sound = $true
     record = $false
@@ -315,9 +316,13 @@ function Save-Settings { $settings | ConvertTo-Json | Set-Content $settingsFile 
         <!-- DISPLAY -->
         <StackPanel x:Name="pageDisplay" Visibility="Collapsed">
           <TextBlock Text="DISPLAY" Style="{StaticResource Heading}"/>
-          <TextBlock Text="The game draws at 480 lines and is scaled to the window, keeping the shape you pick below." Style="{StaticResource Sub}"/>
+          <TextBlock Text="The picture is drawn at the resolution you pick and scaled to the window, keeping the shape you pick below." Style="{StaticResource Sub}"/>
           <TextBlock Text="DISPLAY MODE" Style="{StaticResource Label}"/>
           <WrapPanel x:Name="displayModes"/>
+          <TextBlock Text="RESOLUTION" Style="{StaticResource Label}"/>
+          <WrapPanel x:Name="resolutionModes"/>
+          <TextBlock Style="{StaticResource Sub}" Margin="0,4,0,0"
+                     Text="Higher resolutions give sharper edges on the 3D scenes, HUD and text. The game's own textures stay as they are."/>
           <TextBlock Text="PICTURE SHAPE" Style="{StaticResource Label}"/>
           <WrapPanel x:Name="aspectModes"/>
           <TextBlock Style="{StaticResource Sub}" Margin="0,4,0,0"
@@ -517,6 +522,16 @@ foreach ($key in $aspects.Keys) {
     $ui.aspectModes.Children.Add($chip) | Out-Null
 }
 
+# resolution: the lines the picture is drawn at (DRA2_RESOLUTION); the game's own is 480
+$resolutions = [ordered]@{ '480' = '480p  (original)'; '720' = '720p'; '1080' = '1080p'; '1440' = '1440p'; '2160' = '4K' }
+foreach ($key in $resolutions.Keys) {
+    $chip = New-Object Windows.Controls.RadioButton -Property @{ Content = $resolutions[$key]; Tag = $key; GroupName = 'resolution' }
+    $chip.Style = $window.FindResource('Chip')
+    $chip.IsChecked = ([string]$settings.resolution -eq $key)
+    $chip.Add_Checked({ param($s) $settings.resolution = [string]$s.Tag; Save-Settings })
+    $ui.resolutionModes.Children.Add($chip) | Out-Null
+}
+
 # keyboard table
 $keys = @(
     @('Arrow keys', 'Move / d-pad'), @('Z', 'A  (jump)'), @('X', 'B  (grab / throw)'), @('C', 'X  (special attack)'),
@@ -632,7 +647,8 @@ function Start-Game {
     if (-not (Test-Path $exe)) { Set-Status 'The game isn''t built yet.' 'Advanced → Rebuild the game.'; return }
     New-Item -ItemType Directory -Force $settings.savesPath, $logs | Out-Null
     foreach ($name in 'DRA2_INPUT', 'DRA2_ARENA', 'DRA2_SNAPSHOT', 'DRA2_LOGFRAME', 'DRA2_LOGDRAW', 'DRA2_SAMPLE',
-                      'DRA2_MUTE', 'DRA2_SOUNDDUMP', 'DRA2_LOGSOUND', 'DRA2_WINDOW', 'DRA2_SOFT', 'DRA2_ASPECT') {
+                      'DRA2_MUTE', 'DRA2_SOUNDDUMP', 'DRA2_LOGSOUND', 'DRA2_WINDOW', 'DRA2_SOFT', 'DRA2_ASPECT',
+                      'DRA2_RESOLUTION') {
         [Environment]::SetEnvironmentVariable($name, $null, 'Process')
     }
     $env:DRA2_DATA = $settings.dataPath
@@ -640,6 +656,7 @@ function Start-Game {
     $env:DRA2_WINDOW = $settings.display
     if (-not $settings.soft) { $env:DRA2_SOFT = '0' }
     if ($settings.aspect -ne '4:3') { $env:DRA2_ASPECT = $settings.aspect }
+    $env:DRA2_RESOLUTION = [string]$settings.resolution
     if (-not $settings.sound) { $env:DRA2_MUTE = '1' }
     if ($settings.record) { $env:DRA2_SOUNDDUMP = Join-Path $logs 'sound.wav' }
     $script:gameLog = Join-Path $logs 'last_run.txt'

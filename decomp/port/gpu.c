@@ -38,6 +38,21 @@ int gpu_draw_2d;                /* set by port/d3d8.c around draws in screen coo
 static unsigned game_width = 640, buffer_width = 640, buffer_height = 480;
 static IDirect3DTexture9 *drawing_into;  /* the target texture being drawn into, if not the back buffer */
 
+/* Resolution: DRA2_RESOLUTION=<lines> (720, 1080, 1440, 2160...; 480 or unset is the game's own) renders the picture
+ * at that height, and its width at the picture's shape. The game keeps working in its 480-line coordinates (and
+ * buffer_width columns): only what lands on the back buffer is scaled, draws (gpu_draw) and cleared rectangles
+ * (gpu_clear). The targets the game draws into and reads back as textures keep their own sizes. */
+static unsigned render_width = 640, render_height = 480;
+static float scale_x = 1.0f, scale_y = 1.0f;
+
+static unsigned resolution_setting(void)
+{
+    char v[16] = "";
+    GetEnvironmentVariableA("DRA2_RESOLUTION", v, sizeof v);
+    int lines = atoi(v);
+    return lines < 480 ? 480 : lines > 4320 ? 4320 : (unsigned)lines;
+}
+
 static float aspect_setting(void)
 {
     char v[16] = "";
@@ -120,6 +135,15 @@ int gpu_open(unsigned width, unsigned height)
     buffer_height = height;
     if (gpu_wide > 1.0f)
         printf("[gpu] widescreen: %ux%u, the game's %u wide in the middle\n", buffer_width, height, width);
+    render_height = resolution_setting();
+    if (render_height == height)
+        render_width = buffer_width;
+    else  /* the picture's shape: 4:3 times gpu_wide, an even number of columns */
+        render_width = ((unsigned)((float)render_height * (4.0f / 3.0f) * gpu_wide + 1.0f)) & ~1u;
+    scale_x = (float)render_width / (float)buffer_width, scale_y = (float)render_height / (float)buffer_height;
+    if (render_height != height)
+        printf("[gpu] resolution: %ux%u, the game's %ux%u scaled by %.3f\n", render_width, render_height, buffer_width,
+               buffer_height, scale_y);
     width = buffer_width;
     RECT r = { 0, 0, (LONG)width * scale, (LONG)height * scale };
     AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
@@ -134,8 +158,8 @@ int gpu_open(unsigned width, unsigned height)
         return 0;
     }
     D3DPRESENT_PARAMETERS pp = { 0 };
-    pp.BackBufferWidth = width;
-    pp.BackBufferHeight = height;
+    pp.BackBufferWidth = render_width;
+    pp.BackBufferHeight = render_height;
     pp.BackBufferFormat = D3DFMT_X8R8G8B8;
     pp.BackBufferCount = 1;
     pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
@@ -153,7 +177,7 @@ int gpu_open(unsigned width, unsigned height)
         printf("[gpu] CreateDevice failed: %08lx\n", (unsigned long)hr);
         return 0;
     }
-    printf("[gpu] Direct3D 9 device %ux%u\n", width, height);
+    printf("[gpu] Direct3D 9 device %ux%u\n", render_width, render_height);
     IDirect3DDevice9_SetRenderState(device, D3DRS_CULLMODE, D3DCULL_NONE);
     IDirect3DDevice9_SetRenderState(device, D3DRS_LIGHTING, FALSE);
     IDirect3DDevice9_SetRenderState(device, D3DRS_ZENABLE, D3DZB_TRUE);
@@ -203,12 +227,15 @@ void gpu_clear(int count, const long *rects, unsigned flags, unsigned color, flo
         printf("[gpu] clear flags %x colour %08x z %g (%d rects)\n", flags, color, z, rects ? count : 0);
     begin_scene();
     D3DRECT wide_rects[8];
-    if (rects && !drawing_into && buffer_width != game_width && count > 0 && count <= 8) {
+    int wide = buffer_width != game_width, scaled = render_height != buffer_height;
+    if (rects && !drawing_into && (wide || scaled) && count > 0 && count <= 8) {
         for (int i = 0; i < count; i++) {  /* on the back buffer, as 2D drawing is */
             const long *q = rects + 4 * i;
             int full = q[0] <= 0 && q[2] >= (long)game_width;
-            wide_rects[i].x1 = (LONG)wide_x((float)q[0], 1, full), wide_rects[i].y1 = q[1];
-            wide_rects[i].x2 = (LONG)wide_x((float)q[2], 1, full), wide_rects[i].y2 = q[3];
+            float x1 = wide ? wide_x((float)q[0], 1, full) : (float)q[0];
+            float x2 = wide ? wide_x((float)q[2], 1, full) : (float)q[2];
+            wide_rects[i].x1 = (LONG)(x1 * scale_x + 0.5f), wide_rects[i].y1 = (LONG)((float)q[1] * scale_y + 0.5f);
+            wide_rects[i].x2 = (LONG)(x2 * scale_x + 0.5f), wide_rects[i].y2 = (LONG)((float)q[3] * scale_y + 0.5f);
         }
         rects = (const long *)wide_rects;
     }
@@ -1102,8 +1129,10 @@ void gpu_draw(int primitive, const GpuVertex *v, unsigned count)
             lo = v[i].x < lo ? v[i].x : lo, hi = v[i].x > hi ? v[i].x : hi;
         full = lo <= 1.0f && hi >= (float)game_width - 1.0f;
     }
+    /* on the back buffer at another resolution: the game's pixel edges onto the scaled ones (sx, sy) */
+    float sx = drawing_into ? 1.0f : scale_x, sy = drawing_into ? 1.0f : scale_y;
     #define PUT(i) do { scratch[n] = v[i]; if (wide) scratch[n].x = wide_x(scratch[n].x, gpu_draw_2d, full); \
-                        scratch[n].x -= 0.5f, scratch[n].y -= 0.5f; n++; } while (0)
+                        scratch[n].x = scratch[n].x * sx - 0.5f, scratch[n].y = scratch[n].y * sy - 0.5f; n++; } while (0)
     switch (primitive) {
     case 1: type = D3DPT_POINTLIST; for (unsigned i = 0; i < count; i++) PUT(i); prims = n; break;
     case 2: type = D3DPT_LINELIST; for (unsigned i = 0; i < count; i++) PUT(i); prims = n / 2; break;
@@ -1315,7 +1344,7 @@ static void soft_display(void)
             ID3D10Blob_Release(blob);
         if (errors)
             ID3D10Blob_Release(errors);
-        line = 1.0f / (float)desc.Height;
+        line = 1.0f / (float)buffer_height;  /* the game's line, several of the back buffer's at a higher resolution */
         printf("[gpu] soft display %s\n", state ? "on" : v[0] == '0' ? "off (DRA2_SOFT=0)" : "unavailable");
         if (!state) {
             IDirect3DSurface9_Release(back);
@@ -1348,8 +1377,9 @@ static void soft_display(void)
     float c0[4] = { 0, line, 0, 0 };
     IDirect3DDevice9_SetPixelShaderConstantF(d, 0, c0, 1);
     IDirect3DDevice9_SetTexture(d, 0, (IDirect3DBaseTexture9 *)copy);
-    IDirect3DDevice9_SetSamplerState(d, 0, D3DSAMP_MINFILTER, D3DTEXF_POINT);
-    IDirect3DDevice9_SetSamplerState(d, 0, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+    DWORD filter = desc.Height == buffer_height ? D3DTEXF_POINT : D3DTEXF_LINEAR;  /* scaled: between lines */
+    IDirect3DDevice9_SetSamplerState(d, 0, D3DSAMP_MINFILTER, filter);
+    IDirect3DDevice9_SetSamplerState(d, 0, D3DSAMP_MAGFILTER, filter);
     IDirect3DDevice9_SetSamplerState(d, 0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
     IDirect3DDevice9_SetSamplerState(d, 0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
     IDirect3DDevice9_SetSamplerState(d, 0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
