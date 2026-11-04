@@ -192,6 +192,8 @@ typedef struct {
     int linear;          /* linear textures are addressed in texels, swizzled ones 0..1 */
     unsigned bytes;      /* the source's size */
     DWORD sum;           /* a sample of the source, to notice it was rewritten */
+    unsigned long long full;  /* a checksum of all of it, checked once a frame (full_sum) */
+    unsigned checked;    /* the frame full was last checked in */
     unsigned last_used;  /* the frame it was last bound in */
 } CachedTexture;
 
@@ -253,6 +255,20 @@ static DWORD source_sum(const CachedTexture *c)
     return s;
 }
 
+/* All of the source (Fletcher-style, so moved data counts too). The sample above can miss a rewrite: the 1-player
+ * "VS" screen loads its logo where a fighter's portrait was, both 256x256 DXT3 and mostly transparent, and the 32
+ * sampled words all fell on empty blocks, so the logo drew as the portrait. */
+static unsigned long long full_sum(const CachedTexture *c)
+{
+    const DWORD *p = (const DWORD *)c->data;
+    unsigned long long a = 0, b = 0;
+    for (unsigned i = 0, words = c->bytes / 4; i < words; i++) {
+        a += p[i];
+        b += a;
+    }
+    return a ^ (b << 32 | b >> 32);
+}
+
 static void decode(CachedTexture *c, const XTexture *x);
 static void dxt_block(D3DFORMAT f, const unsigned char *b, DWORD out[16]);
 
@@ -265,8 +281,15 @@ static CachedTexture *texture_for(const XTexture *x)
         if (cache[i].data == x->Data && cache[i].format == x->Format && cache[i].size == x->Size)
             c = &cache[i];
     if (c && c->bytes && source_sum(c) == c->sum) {
-        c->last_used = texture_frame;
-        return c;
+        int same = 1;
+        if (c->checked != texture_frame) {  /* the whole source, once a frame: the sample is only a quick check */
+            c->checked = texture_frame;
+            same = full_sum(c) == c->full;
+        }
+        if (same) {
+            c->last_used = texture_frame;
+            return c;
+        }
     }
     if (!c && cache_count < (int)(sizeof cache / sizeof *cache))
         c = &cache[cache_count++];
@@ -286,8 +309,11 @@ static CachedTexture *texture_for(const XTexture *x)
     c->data = x->Data, c->format = x->Format, c->size = x->Size;
     c->last_used = texture_frame;
     decode(c, x);
-    if (c->bytes)
+    if (c->bytes) {
         c->sum = source_sum(c);
+        c->full = full_sum(c);
+        c->checked = texture_frame;
+    }
     return c;
 }
 
