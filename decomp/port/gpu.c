@@ -98,6 +98,8 @@ static int log_frame_now(void)
     return log_frame && texture_frame + 1 == (unsigned)log_frame;
 }
 
+static int has_depth = 1;  /* a depth buffer is bound (gpu_set_render_target) */
+
 /* Clear with Xbox flags: D3DCLEAR_ZBUFFER 1, STENCIL 2, TARGET_R/G/B/A 0x10-0x80 */
 void gpu_clear(int count, const long *rects, unsigned flags, unsigned color, float z, unsigned stencil)
 {
@@ -106,9 +108,9 @@ void gpu_clear(int count, const long *rects, unsigned flags, unsigned color, flo
     DWORD d9 = 0;
     if (flags & 0xF0)
         d9 |= D3DCLEAR_TARGET;
-    if (flags & 1)
+    if ((flags & 1) && has_depth)
         d9 |= D3DCLEAR_ZBUFFER;
-    if (flags & 2)
+    if ((flags & 2) && has_depth)
         d9 |= D3DCLEAR_STENCIL;
     if (!d9)
         return;
@@ -418,16 +420,82 @@ static void dump_texture(IDirect3DTexture9 *t, const void *xbox)
     IDirect3DTexture9_UnlockRect(t, 0);
 }
 
+/* Render targets other than the back buffer: surfaces the game draws into and then binds as textures (each
+ * fighter's 64x64 shadow). Each gets a Direct3D 9 render-target texture, found again by the Xbox surface's data
+ * address when a texture with that address is bound (gpu_set_texture). */
+static struct { DWORD data; unsigned width, height; IDirect3DTexture9 *texture; } targets[16];
+static int target_count;
+static IDirect3DSurface9 *back_buffer, *back_depth;
+static IDirect3DTexture9 *drawing_into;  /* the target texture being drawn into, if not the back buffer */
+
+void gpu_set_render_target(DWORD data, unsigned width, unsigned height, int back, int depth)
+{
+    if (!device)
+        return;
+    if (!back_buffer) {
+        IDirect3DDevice9_GetRenderTarget(device, 0, &back_buffer);
+        IDirect3DDevice9_GetDepthStencilSurface(device, &back_depth);
+    }
+    IDirect3DSurface9 *surface = back_buffer;
+    if (!back) {
+        int i = 0;
+        while (i < target_count && !(targets[i].data == data && targets[i].width == width && targets[i].height == height))
+            i++;
+        if (i == target_count) {
+            if (target_count == (int)(sizeof targets / sizeof *targets) ||
+                FAILED(IDirect3DDevice9_CreateTexture(device, width, height, 1, D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8,
+                                                      D3DPOOL_DEFAULT, &targets[i].texture, 0)))
+                return;
+            targets[i].data = data, targets[i].width = width, targets[i].height = height;
+            target_count++;
+        }
+        IDirect3DTexture9_GetSurfaceLevel(targets[i].texture, 0, &surface);
+        drawing_into = targets[i].texture;
+    } else
+        drawing_into = 0;
+    /* a texture can't be read while it is being drawn into: its stages are emptied meanwhile, and get it back after
+     * (the game binds it once, and its own state still has it bound) */
+    for (int s = 0; s < 4; s++)
+        IDirect3DDevice9_SetTexture(device, (DWORD)s, (IDirect3DBaseTexture9 *)(bound[s].texture == drawing_into &&
+                                                                               drawing_into ? 0 : bound[s].texture));
+    IDirect3DDevice9_SetRenderTarget(device, 0, surface);  /* also sets the viewport to the whole target */
+    if (surface != back_buffer)
+        IDirect3DSurface9_Release(surface);
+    /* the game keeps its 640x480 depth buffer for the small targets too, as Direct3D 9 allows */
+    IDirect3DDevice9_SetDepthStencilSurface(device, depth ? back_depth : 0);
+    has_depth = depth;
+    if (log_frame_now())
+        printf("[gpu] render target %08lx %ux%u%s\n", (unsigned long)data, width, height, back ? " (back buffer)" : "");
+}
+
+static IDirect3DTexture9 *target_texture(const XTexture *x, unsigned *width, unsigned *height)
+{
+    for (int i = 0; i < target_count; i++)
+        if (targets[i].data == x->Data) {
+            *width = targets[i].width, *height = targets[i].height;
+            return targets[i].texture;
+        }
+    return 0;
+}
+
 void gpu_set_texture(int stage, const void *xbox_texture)
 {
     if (!device || stage < 0 || stage > 3)
         return;
-    CachedTexture *c = xbox_texture ? texture_for((const XTexture *)xbox_texture) : 0;
-    bound[stage].texture = c ? c->texture : 0;
-    bound[stage].width = c ? c->width : 1, bound[stage].height = c ? c->height : 1;
-    bound[stage].linear = c ? c->linear : 0;
+    unsigned width, height;
+    IDirect3DTexture9 *target = xbox_texture ? target_texture((const XTexture *)xbox_texture, &width, &height) : 0;
+    CachedTexture *c = xbox_texture && !target ? texture_for((const XTexture *)xbox_texture) : 0;
+    if (target) {
+        bound[stage].texture = target, bound[stage].width = width, bound[stage].height = height;
+        bound[stage].linear = 0;
+    } else {
+        bound[stage].texture = c ? c->texture : 0;
+        bound[stage].width = c ? c->width : 1, bound[stage].height = c ? c->height : 1;
+        bound[stage].linear = c ? c->linear : 0;
+    }
     bound[stage].xbox = xbox_texture;
-    IDirect3DDevice9_SetTexture(device, (DWORD)stage, (IDirect3DBaseTexture9 *)bound[stage].texture);
+    IDirect3DDevice9_SetTexture(device, (DWORD)stage, (IDirect3DBaseTexture9 *)(drawing_into && bound[stage].texture ==
+                                                                       drawing_into ? 0 : bound[stage].texture));
 }
 
 /* ------------------------------------------------------------------------------------------ render states -- */
@@ -640,8 +708,12 @@ static IDirect3DPixelShader9 *translate(const PixelShaderDef *ps)
         "            float4 t2 : TEXCOORD2, float4 t3 : TEXCOORD3) : COLOR\n{\n");
     put("  float4 V0 = v0, V1 = v1, R1 = 0;\n");
     for (int t = 0; t < 4; t++) {
+        /* PROJECT2D (1), the ordinary mode, divides by q as the NV2A (and xemu) does; the game's coordinates mostly
+         * have q = 1, which the attribute defaults and the fixed-function path also give */
         unsigned mode = (ps->texture_modes >> (5 * t)) & 0x1f;
-        if (mode)
+        if (mode == 1)
+            put("  float4 T%d = tex2Dproj(s%d, t%d);\n", t, t, t);
+        else if (mode)
             put("  float4 T%d = tex2D(s%d, t%d.xy);\n", t, t, t);
         else
             put("  float4 T%d = 0;\n", t);

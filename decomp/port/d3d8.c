@@ -139,11 +139,22 @@ int __stdcall D3D8__D3DDevice_GetRenderTarget2(void)
     return (int)render_target;
 }
 
+/* SetRenderTarget(surface, depth): the back buffer, or a surface the game draws into and later binds as a texture
+ * (each fighter's 64x64 shadow); gpu.c keeps a Direct3D 9 render-target texture for the latter */
+void gpu_set_render_target(DWORD data, unsigned width, unsigned height, int back_buffer, int depth);
+
 void __stdcall D3D8__D3DDevice_SetRenderTarget(int target, int depth)
 {
     if (target)
         render_target = (XSurface *)target;
     depth_target = (XSurface *)depth;
+    if (!render_target)
+        return;
+    int back = 0;
+    for (int i = 0; i < 3; i++)
+        back |= present.BufferSurfaces[i] && render_target == present.BufferSurfaces[i];
+    gpu_set_render_target(render_target->Data, surface_width(render_target), surface_height(render_target), back,
+                          depth_target != 0);
 }
 
 /* D3DGAMMARAMP: red, green, blue, 256 bytes each */
