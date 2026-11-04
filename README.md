@@ -35,7 +35,7 @@ The release's `decomp/build/dra2_native.exe` and `.dll` hold only the port (the 
 
 ### Building from source
 
-Only for changing the port: playing needs none of this. A git clone or the "Source code" ZIP has no built game: build it with Advanced → **Rebuild the game**, or `powershell -ExecutionPolicy Bypass -File tools\build_native.ps1`. It takes under a minute, writes `decomp/build/dra2_native.exe` and `dra2_native.dll`, and ends with `linked ...dra2_native.dll (... KB) and ...dra2_native.exe`. It needs:
+Only for changing the port: playing needs none of this. A git clone or the "Source code" ZIP has no built game: build it with `powershell -ExecutionPolicy Bypass -File tools\build_native.ps1`. It takes under a minute, writes `decomp/build/dra2_native.exe` and `dra2_native.dll`, and ends with `linked ...dra2_native.dll (... KB) and ...dra2_native.exe`. It needs:
 - **Python 3** (python.org). In its installer, tick *Add python.exe to PATH*. Then `python --version` in a new terminal should print 3.x, not open the Microsoft Store. Only the standard library is used.
 - **llvm-mingw**, a portable compiler (about 700 MB unzipped, no installer, no admin rights). From [its releases](https://github.com/mstorsjo/llvm-mingw/releases), take `llvm-mingw-<date>-ucrt-x86_64.zip` (the build here uses 20261006). Unzip it into one of these folders, and the build scripts find it there (`tools/find_mingw.ps1`):
   - this repository's folder;
@@ -60,7 +60,7 @@ Double-click **`DRA 2.exe`** to open the launcher (`tools/launcher.ps1`, a WPF w
 - **Audio:** sound on or off, and recording to `logs/sound.wav`.
 - **Controls:** rebind the keyboard (one key per control) and the controller's buttons. White and Black are the original Xbox controller's two extra buttons; on an XInput pad they're LB and RB unless you move them.
 - **Saves:** the saves folder, with backups to `save_backups/`.
-- **Advanced:** the game data folder, extracting the disc image, rebuilding the game and opening the last log.
+- **Advanced:** the game data folder, extracting the disc image and opening the last log.
 
 The launcher minimises while the game runs, then reports how the run ended, including any crash lines from `logs/last_run.txt`. Its settings live in `launcher_settings.json`, and saves go to `saves/`; both stay local. The native build needs only the port's sources and `analysis/native_symbols.tsv` (when the extracted `default.xbe` is there, it reads the kernel import table from it instead; the result is the same): the Xbox library functions the port replaces and the kernel imports, by address. `tools/gen_native.py` rewrites that file from the Ghidra project's `analysis/data_symbols.tsv` wherever the analysis pipeline has run. (The recompiled build, `decomp/build/dra2.exe`, needs the whole pipeline.) `"DRA 2.exe" -Now` starts the game without the launcher, and `-Console` opens a text menu instead (`tools/play.ps1`).
 

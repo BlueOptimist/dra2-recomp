@@ -317,16 +317,11 @@ function Save-Settings { $settings | ConvertTo-Json | Set-Content $settingsFile 
             <TextBlock.Effect><DropShadowEffect Color="#000000" ShadowDepth="4" BlurRadius="10" Opacity="1"/></TextBlock.Effect>
           </TextBlock>
           <TextBlock Text="Windows port  ·  native build" Style="{StaticResource Sub}" FontSize="15" Margin="4,-4,0,22"/>
-          <UniformGrid Columns="3" Width="640" HorizontalAlignment="Left">
+          <UniformGrid Columns="2" Width="427" HorizontalAlignment="Left">
             <Border Style="{StaticResource Card}" Margin="0,0,12,0">
               <StackPanel><TextBlock Text="GAME DATA" Style="{StaticResource Sub}" FontSize="11"/>
                 <TextBlock x:Name="dataStatus" FontSize="17" FontFamily="Segoe UI Semibold" Margin="0,4,0,0"/>
                 <TextBlock x:Name="dataDetail" Style="{StaticResource Sub}" FontSize="11"/></StackPanel>
-            </Border>
-            <Border Style="{StaticResource Card}" Margin="0,0,12,0">
-              <StackPanel><TextBlock Text="GAME BUILD" Style="{StaticResource Sub}" FontSize="11"/>
-                <TextBlock x:Name="buildStatus" FontSize="17" FontFamily="Segoe UI Semibold" Margin="0,4,0,0"/>
-                <TextBlock x:Name="buildDetail" Style="{StaticResource Sub}" FontSize="11"/></StackPanel>
             </Border>
             <Border Style="{StaticResource Card}">
               <StackPanel><TextBlock Text="SAVES" Style="{StaticResource Sub}" FontSize="11"/>
@@ -424,7 +419,6 @@ function Save-Settings { $settings | ConvertTo-Json | Set-Content $settingsFile 
           <TextBlock Text="TOOLS" Style="{StaticResource Label}"/>
           <WrapPanel>
             <Button x:Name="extract" Style="{StaticResource Btn}" Content="Extract the disc image"/>
-            <Button x:Name="rebuild" Style="{StaticResource Btn}" Content="Rebuild the game"/>
             <Button x:Name="openLog" Style="{StaticResource Btn}" Content="Open the last game log"/>
             <Button x:Name="openRepo" Style="{StaticResource Btn}" Content="Open the port folder"/>
           </WrapPanel>
@@ -510,10 +504,6 @@ function Update-Overview {
     $ok = [Windows.Media.Brushes]::LightGreen; $bad = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(255, 120, 90))
     if (Test-Path $xbe) { $ui.dataStatus.Text = 'Ready'; $ui.dataStatus.Foreground = $ok; $ui.dataDetail.Text = Split-Path -Leaf $settings.dataPath }
     else { $ui.dataStatus.Text = 'Missing'; $ui.dataStatus.Foreground = $bad; $ui.dataDetail.Text = 'Advanced → Extract the disc image' }
-    if (Test-Path $exe) {
-        $ui.buildStatus.Text = 'Ready'; $ui.buildStatus.Foreground = $ok
-        $ui.buildDetail.Text = 'built ' + (Get-Item (Join-Path $root 'decomp\build\dra2_native.dll') -ErrorAction SilentlyContinue).LastWriteTime.ToString('d MMM yyyy, HH:mm')
-    } else { $ui.buildStatus.Text = 'Not built'; $ui.buildStatus.Foreground = $bad; $ui.buildDetail.Text = 'Advanced → Rebuild the game' }
     $u = Join-Path $settings.savesPath 'u'
     $count = @(Get-ChildItem $u -Directory -ErrorAction SilentlyContinue).Count
     if ($count) {
@@ -798,14 +788,10 @@ function Start-Tool([string]$title, [string[]]$arguments, [string]$program = 'po
     $script:tool = Start-Process $program -ArgumentList $arguments -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput $script:toolLog -RedirectStandardError $script:toolErrors
     $null = $script:tool.Handle
-    $ui.rebuild.IsEnabled = $false; $ui.extract.IsEnabled = $false; $ui.playBtn.IsEnabled = $false
+    $ui.extract.IsEnabled = $false; $ui.playBtn.IsEnabled = $false
     Set-Status "$title..." 'This can take a few minutes.'
     $script:toolTitle = $title
 }
-$ui.rebuild.Add_Click({
-    $env:DRA2_DATA = $settings.dataPath  # the build reads default.xbe from there
-    Start-Tool 'Building the game' @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$(Join-Path $root 'tools\build_native.ps1')`"")
-})
 $ui.extract.Add_Click({
     $iso = Get-ChildItem $root -Filter *.iso | Select-Object -First 1
     if (-not $iso) {
@@ -823,7 +809,7 @@ function Start-Game {
     if ($script:game -or $script:tool) { return }
     Update-Overview
     if (-not (Test-Path (Join-Path $settings.dataPath 'default.xbe'))) { Set-Status 'The game data is missing.' 'Advanced → Extract the disc image, or point the game data folder at it.'; return }
-    if (-not (Test-Path $exe)) { Set-Status 'The game isn''t built yet.' 'Advanced → Rebuild the game.'; return }
+    if (-not (Test-Path $exe)) { Set-Status 'The game isn''t built.' 'Download the release ZIP, or build it from source (see the README).'; return }
     New-Item -ItemType Directory -Force $settings.savesPath, $logs | Out-Null
     foreach ($name in 'DRA2_INPUT', 'DRA2_ARENA', 'DRA2_SNAPSHOT', 'DRA2_LOGFRAME', 'DRA2_LOGDRAW', 'DRA2_SAMPLE',
                       'DRA2_MUTE', 'DRA2_SOUNDDUMP', 'DRA2_LOGSOUND', 'DRA2_WINDOW', 'DRA2_SOFT', 'DRA2_ASPECT',
@@ -877,7 +863,7 @@ $timer.Add_Tick({
         if ($script:tool.HasExited) {
             $code = $script:tool.ExitCode
             $script:tool = $null
-            $ui.rebuild.IsEnabled = $true; $ui.extract.IsEnabled = $true; $ui.playBtn.IsEnabled = $true
+            $ui.extract.IsEnabled = $true; $ui.playBtn.IsEnabled = $true
             Update-Overview
             if ($code) { Set-Status "$script:toolTitle failed." 'See the output on the Advanced page.' }
             else { Set-Status "$($script:toolTitle): done." '' }
