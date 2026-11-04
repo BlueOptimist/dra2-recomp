@@ -31,6 +31,7 @@ $settings = [ordered]@{
     pad = ''                                      # controller bindings (DRA2_PAD): control=button,...; '' = defaults
     soft = $true                                  # the Xbox's soft display (DRA2_SOFT)
     sound = $true
+    quickIntro = $true                            # the copyright screen for a second and no studio logos (DRA2_QUICKINTRO)
     record = $false
     hideWhilePlaying = $true
     dataPath = (Join-Path $root 'extracted')
@@ -334,6 +335,7 @@ function Save-Settings { $settings | ConvertTo-Json | Set-Content $settingsFile 
           <TextBlock Text="QUICK SETTINGS" Style="{StaticResource Label}" Margin="0,26,0,10"/>
           <WrapPanel x:Name="quickDisplay"/>
           <CheckBox x:Name="quickSound" Style="{StaticResource Switch}" Content="Sound" Margin="0,6,0,0"/>
+          <CheckBox x:Name="quickIntro" Style="{StaticResource Switch}" Content="Quick start: skip the studio logos and wait less at the copyright screen" Margin="0,6,0,0"/>
         </StackPanel>
 
         <!-- DISPLAY -->
@@ -735,6 +737,9 @@ foreach ($p in $pages) {
 
 # ------------------------------------------------------------------------------------------------ settings --
 $ui.quickSound.IsChecked = $settings.sound
+$ui.quickIntro.IsChecked = $settings.quickIntro
+$ui.quickIntro.Add_Checked({ $settings.quickIntro = $true; Save-Settings })
+$ui.quickIntro.Add_Unchecked({ $settings.quickIntro = $false; Save-Settings })
 $ui.audioSound.IsChecked = $settings.sound
 $ui.audioRecord.IsChecked = $settings.record
 $ui.hideWhilePlaying.IsChecked = $settings.hideWhilePlaying
@@ -821,7 +826,7 @@ function Start-Game {
     New-Item -ItemType Directory -Force $settings.savesPath, $logs | Out-Null
     foreach ($name in 'DRA2_INPUT', 'DRA2_ARENA', 'DRA2_SNAPSHOT', 'DRA2_LOGFRAME', 'DRA2_LOGDRAW', 'DRA2_SAMPLE',
                       'DRA2_MUTE', 'DRA2_SOUNDDUMP', 'DRA2_LOGSOUND', 'DRA2_WINDOW', 'DRA2_SOFT', 'DRA2_ASPECT',
-                      'DRA2_RESOLUTION', 'DRA2_KEYS', 'DRA2_PAD') {
+                      'DRA2_RESOLUTION', 'DRA2_KEYS', 'DRA2_PAD', 'DRA2_QUICKINTRO') {
         [Environment]::SetEnvironmentVariable($name, $null, 'Process')
     }
     $env:DRA2_DATA = $settings.dataPath
@@ -833,6 +838,7 @@ function Start-Game {
     if ($settings.keys) { $env:DRA2_KEYS = [string]$settings.keys }
     if ($settings.pad) { $env:DRA2_PAD = [string]$settings.pad }
     if (-not $settings.sound) { $env:DRA2_MUTE = '1' }
+    if ($settings.quickIntro) { $env:DRA2_QUICKINTRO = '1' }
     if ($settings.record) { $env:DRA2_SOUNDDUMP = Join-Path $logs 'sound.wav' }
     $script:gameLog = Join-Path $logs 'last_run.txt'
     # -NoNewWindow: the game is a console program, and would otherwise get a console window of its own. It shares the

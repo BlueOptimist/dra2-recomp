@@ -458,6 +458,31 @@ static void patch_projection_calls(void)
     }
 }
 
+/* DRA2_QUICKINTRO=1: the screens before the title are shorter. The copyright screen (MenuLegal::Update, 0xcc720)
+ * stays at least 5 seconds and the Bandai and Black Ship logos (0xcd450, 0xcd710) 5 seconds unless a button is
+ * pressed; all three compare their time with the same 5.0 (fcomp [0x294264]). Each compare is pointed at its own
+ * value instead: the copyright screen shows for a second (it still waits for the save check it runs, as before), the
+ * logos are passed. */
+static float legal_seconds = 1.0f, logo_seconds = 0.0f;
+
+static void patch_intro_times(void)
+{
+    const char *quick = getenv("DRA2_QUICKINTRO");
+    if (!quick || quick[0] != '1')
+        return;
+    static const struct { unsigned at; const float *value; } compares[] = {
+        { 0xcc7e0, &legal_seconds }, { 0xcd473, &logo_seconds }, { 0xcd733, &logo_seconds },
+    };
+    for (unsigned i = 0; i < sizeof compares / sizeof compares[0]; i++) {
+        unsigned char *at = (unsigned char *)compares[i].at;
+        if (at[0] != 0xd8 || at[1] != 0x1d || *(unsigned *)(at + 2) != 0x294264) {
+            printf("[native] intro time compare at %#x isn't as expected: left as it is\n", compares[i].at);
+            continue;
+        }
+        *(const float **)(at + 2) = compares[i].value;
+    }
+}
+
 __declspec(dllexport) void native_main(void)
 {
     setvbuf(__acrt_iob_func(1), 0, 4 /* _IONBF */, 0);
@@ -506,6 +531,7 @@ __declspec(dllexport) void native_main(void)
     if (((unsigned char *)0x1691af)[0] == 0xff && ((unsigned char *)0x1691b2)[0] == 0xc6)
         memcpy((void *)0x169196, stream_read, sizeof stream_read);
     patch_projection_calls();
+    patch_intro_times();
     /* what the Xbox startup thread (0x126fac) runs before main: process setup (heaps), the runtime's _rtinit and
      * _cinit (which runs the startup tables, C initializers first) */
     for (unsigned k = 0; k < sizeof startup / sizeof startup[0]; k++) {
