@@ -1,5 +1,6 @@
-# Draw tools/launcher/icon.ico: an orange hexagon with a "2" on a dark-blue tile, inside a ring of green "binary"
-# dashes, in the launcher's colours. Sizes 256, 48, 32 and 16, stored as PNG (Windows Vista and later).
+# Draw tools/launcher/icon.ico: a big yellow-to-orange "2" with a red rim and dark outline, on deep blue with light
+# streaks bursting from the middle. Original art in the cover's spirit: no logo or wordmark from the game. Sizes 256,
+# 48, 32 and 16, stored as PNG (Windows Vista and later); at 16 only the "2" on blue, so it stays readable.
 # Usage: powershell -File tools\launcher\make_icon.ps1
 #        powershell -File tools\launcher\make_icon.ps1 -Image <picture>
 #   -Image: make tools/launcher/cover.ico from a picture of your own instead (any format Windows can open: png, jpg,
@@ -32,44 +33,83 @@ function Draw-Picture([int]$size) {
     return , $stream.ToArray()
 }
 
+function Color([int]$a, [int]$r, [int]$g, [int]$b) { [Drawing.Color]::FromArgb($a, $r, $g, $b) }
+function Point([double]$x, [double]$y) { New-Object Drawing.PointF ([single]$x), ([single]$y) }
+
 function Draw([int]$size) {
     if ($Image) { return , (Draw-Picture $size) }
     $bmp = New-Object Drawing.Bitmap $size, $size
     $g = [Drawing.Graphics]::FromImage($bmp)
-    $g.SmoothingMode = 'AntiAlias'; $g.TextRenderingHint = 'AntiAliasGridFit'
+    $g.SmoothingMode = 'AntiAlias'; $g.PixelOffsetMode = 'HighQuality'
     $s = $size / 256.0
-    # the tile: a rounded square, dark blue in the middle
+    # the tile: a rounded square
     $tile = New-Object Drawing.Drawing2D.GraphicsPath
-    $r = 56 * $s; $e = 8 * $s; $w = $size - 2 * $e
+    $r = 60 * $s; $e = [math]::Max(0.5, 6 * $s); $w = $size - 2 * $e
     $tile.AddArc($e, $e, $r, $r, 180, 90); $tile.AddArc($e + $w - $r, $e, $r, $r, 270, 90)
     $tile.AddArc($e + $w - $r, $e + $w - $r, $r, $r, 0, 90); $tile.AddArc($e, $e + $w - $r, $r, $r, 90, 90)
     $tile.CloseFigure()
-    $fill = New-Object Drawing.Drawing2D.PathGradientBrush $tile
-    $fill.CenterColor = [Drawing.Color]::FromArgb(255, 16, 40, 96)
-    $fill.SurroundColors = @([Drawing.Color]::FromArgb(255, 4, 8, 22))
-    $g.FillPath($fill, $tile)
-    $g.DrawPath((New-Object Drawing.Pen ([Drawing.Color]::FromArgb(255, 56, 200, 255)), ([math]::Max(1, 4 * $s))), $tile)
-    # the ring of dashes
-    if ($size -ge 32) {
-        $ring = New-Object Drawing.Pen ([Drawing.Color]::FromArgb(200, 43, 224, 122)), (14 * $s)
-        $ring.DashPattern = [single[]](0.5, 0.9, 1.6, 0.6, 0.5, 1.8)
-        $g.DrawEllipse($ring, 40 * $s, 40 * $s, 176 * $s, 176 * $s)
+    $g.SetClip($tile)
+    # deep blue, brightening toward the middle
+    $bg = New-Object Drawing.Drawing2D.PathGradientBrush $tile
+    $bg.CenterColor = Color 255 40 92 210
+    $bg.SurroundColors = @(Color 255 6 14 70)
+    $g.FillPath($bg, $tile)
+    # light streaks bursting out from the middle
+    $c = 128 * $s
+    if ($size -gt 16) {
+        $rng = New-Object Random 7  # the same streaks every time
+        $count = if ($size -ge 64) { 150 } else { 40 }
+        for ($k = 0; $k -lt $count; $k++) {
+            $a = $rng.NextDouble() * 2 * [math]::PI
+            $from = (20 + $rng.NextDouble() * 50) * $s; $to = (120 + $rng.NextDouble() * 80) * $s
+            $alpha = [int](40 + $rng.NextDouble() * 110)
+            $streak = New-Object Drawing.Pen (Color $alpha 170 215 255), ([single]([math]::Max(0.8, (0.6 + $rng.NextDouble() * 2.2) * $s)))
+            $g.DrawLine($streak, (Point ($c + $from * [math]::Cos($a)) ($c + $from * [math]::Sin($a))),
+                (Point ($c + $to * [math]::Cos($a)) ($c + $to * [math]::Sin($a))))
+        }
+        # a white glow at the centre
+        $core = New-Object Drawing.Drawing2D.GraphicsPath
+        $core.AddEllipse([single]($c - 70 * $s), [single]($c - 70 * $s), [single](140 * $s), [single](140 * $s))
+        $glow = New-Object Drawing.Drawing2D.PathGradientBrush $core
+        $glow.CenterColor = Color 210 235 245 255
+        $glow.SurroundColors = @(Color 0 120 180 255)
+        $g.FillPath($glow, $core)
     }
-    # the hexagon
-    $c = 128 * $s; $h = 74 * $s
-    $points = foreach ($k in 0..5) {
-        $a = [math]::PI / 3 * $k
-        New-Object Drawing.PointF ([single]($c + $h * [math]::Cos($a))), ([single]($c + $h * [math]::Sin($a)))
-    }
-    $orange = New-Object Drawing.Drawing2D.LinearGradientBrush (New-Object Drawing.PointF 0, ($c - $h)),
-        (New-Object Drawing.PointF 0, ($c + $h)), ([Drawing.Color]::FromArgb(255, 255, 228, 92)), ([Drawing.Color]::FromArgb(255, 232, 51, 27))
-    $g.FillPolygon($orange, [Drawing.PointF[]]$points)
-    $g.DrawPolygon((New-Object Drawing.Pen ([Drawing.Color]::FromArgb(255, 255, 242, 160)), ([math]::Max(1, 5 * $s))), [Drawing.PointF[]]$points)
-    # the "2"
-    $font = New-Object Drawing.Font 'Segoe UI Black', ([single](96 * $s)), ([Drawing.FontStyle]::Italic), ([Drawing.GraphicsUnit]::Pixel)
+    $g.ResetClip()
+    # the "2": big, leaning forward, yellow to orange, with a red rim inside a dark outline
+    $text = New-Object Drawing.Drawing2D.GraphicsPath
     $format = New-Object Drawing.StringFormat; $format.Alignment = 'Center'; $format.LineAlignment = 'Center'
-    $box = New-Object Drawing.RectangleF ([single](0)), ([single](6 * $s)), ([single]$size), ([single]$size)
-    $g.DrawString('2', $font, (New-Object Drawing.SolidBrush ([Drawing.Color]::FromArgb(255, 42, 10, 0))), $box, $format)
+    $em = if ($size -le 16) { 250 } elseif ($size -le 32) { 236 } else { 218 }
+    $text.AddString('2', (New-Object Drawing.FontFamily 'Arial Black'), [int][Drawing.FontStyle]::Italic, [single]($em * $s),
+        (New-Object Drawing.RectangleF ([single](-2 * $s)), ([single](6 * $s)), ([single]$size), ([single]$size)), $format)
+    if ($size -gt 16) {  # a drop shadow
+        $shadow = $text.Clone()
+        $shift = New-Object Drawing.Drawing2D.Matrix; $shift.Translate([single](7 * $s), [single](8 * $s))
+        $shadow.Transform($shift)
+        $g.FillPath((New-Object Drawing.SolidBrush (Color 150 0 0 20)), $shadow)
+    }
+    $dark = New-Object Drawing.Pen (Color 255 20 10 40), $(if ($size -le 16) { 1.6 } else { [math]::Max(1.4, 20 * $s) })
+    $dark.LineJoin = 'Round'
+    $g.DrawPath($dark, $text)
+    if ($size -gt 16) {
+        $rim = New-Object Drawing.Pen (Color 255 214 30 22), ([math]::Max(1, 9 * $s))
+        $rim.LineJoin = 'Round'
+        $g.DrawPath($rim, $text)
+    }
+    $bounds = $text.GetBounds()
+    $fill = New-Object Drawing.Drawing2D.LinearGradientBrush (Point 0 $bounds.Top), (Point 0 $bounds.Bottom), (Color 255 255 240 80), (Color 255 240 120 10)
+    $blend = New-Object Drawing.Drawing2D.ColorBlend 3
+    $blend.Colors = @((Color 255 255 244 96), (Color 255 255 206 34), (Color 255 242 122 12))
+    $blend.Positions = [single[]](0, 0.45, 1)
+    $fill.InterpolationColors = $blend
+    $g.FillPath($fill, $text)
+    if ($size -ge 48) {  # a bright highlight along the top edge
+        $g.SetClip($text)
+        $g.FillRectangle((New-Object Drawing.SolidBrush (Color 90 255 255 230)), 0, $bounds.Top, $size, $bounds.Height * 0.22)
+        $g.ResetClip()
+    }
+    # the tile's rim
+    $g.DrawPath((New-Object Drawing.Pen (Color 255 120 180 255), ([math]::Max(1, 4 * $s))), $tile)
     $g.Dispose()
     $stream = New-Object IO.MemoryStream
     $bmp.Save($stream, [Drawing.Imaging.ImageFormat]::Png); $bmp.Dispose()
