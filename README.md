@@ -10,6 +10,12 @@ To work on it you need your own copy of the game:
 2. Import `default.xbe` into Ghidra with the `ghidra-xbe` loader.
 3. Run the scripts and tools as described below and in `decomp/README.md`.
 
+### Playing
+
+Double-click **`Play.cmd`** (it runs `tools/play.ps1`). Its menu can play with or without sound, record the sound to `logs/sound.wav`, rebuild the game, and open the saves folder or the last log. On the first run it extracts the `.iso` in this folder to `extracted/` and builds `decomp/build/dra2_native.exe` if they are missing. Building needs the decompiled code in `decomp/build`, which only exists on a machine that has run the pipeline. Saves go to `saves/` and are kept between runs. `Play.cmd -Now` skips the menu.
+
+Keyboard (player 1): arrows move, Z = A (jump), X = B (grab/throw), C = X (special), V = Y, Enter = Start, Esc = Back, Q/W = triggers, E/R = White/Black, I J K L = right stick. Windows controllers work too, and players 2-4 use them.
+
 GitHub Actions (`.github/workflows/ci.yml`) checks what the repository can check without the game:
 - the Python tools compile;
 - the shipped headers compile and the format struct sizes hold;
