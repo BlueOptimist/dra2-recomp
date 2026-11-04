@@ -686,9 +686,11 @@ void gpu_render_state(unsigned method, unsigned value)
 }
 
 /* ------------------------------------------------------------------------------------------------- draws -- */
-/* pretransformed, a diffuse and a specular colour, four 4-component texture coordinates (GpuVertex) */
-#define VERTEX_FVF (D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_SPECULAR | D3DFVF_TEX4 | D3DFVF_TEXCOORDSIZE4(0) | \
-                    D3DFVF_TEXCOORDSIZE4(1) | D3DFVF_TEXCOORDSIZE4(2) | D3DFVF_TEXCOORDSIZE4(3))
+/* pretransformed, a diffuse and a specular colour, four 4-component texture coordinates and the fog factor as a
+ * fifth (GpuVertex) */
+#define VERTEX_FVF (D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_SPECULAR | D3DFVF_TEX5 | D3DFVF_TEXCOORDSIZE4(0) | \
+                    D3DFVF_TEXCOORDSIZE4(1) | D3DFVF_TEXCOORDSIZE4(2) | D3DFVF_TEXCOORDSIZE4(3) | \
+                    D3DFVF_TEXCOORDSIZE1(4))
 
 static GpuVertex scratch[0x20000];
 
@@ -697,7 +699,7 @@ static GpuVertex scratch[0x20000];
  * program is translated once into Direct3D 9 ps_2_0 bytecode, emitted directly (no shader compiler is available):
  *  - NV registers live in temporaries: R0 r0, R1 r1, T0-T3 r2-r5 (loaded with texld), V0/V1 r6/r7 (the diffuse and
  *    specular colours); r8-r11 are scratch. c0-c15 hold each stage's C0/C1, c16/c17 the final combiner's, c18 the fog
- *    colour, c20 = (0, 1, 0.5, 2).
+ *    colour (FOG.rgb; FOG.a is the vertex's fog factor, texture coordinate 4), c20 = (0, 1, 0.5, 2).
  *  - A stage computes, for its RGB and alpha portions separately, A*B (or dot3), C*D (or dot3) and their sum (or a mux
  *    on r0.a), each after the inputs' mappings (invert, expand, half bias, negate) and before the output's scale/bias;
  *    all reads happen before the stage's writes, as on the hardware.
@@ -731,7 +733,7 @@ static const char *reg_name(unsigned r, int stage, int final)
     switch (r) {
     case 1: snprintf(s, 24, "c[%d]", final ? 16 : 2 * stage); return s;
     case 2: snprintf(s, 24, "c[%d]", final ? 17 : 2 * stage + 1); return s;
-    case 3: return "c[18]";
+    case 3: return "FOG";
     case 4: return "V0";
     case 5: return "V1";
     case 8: return "T0";
@@ -846,8 +848,8 @@ static IDirect3DPixelShader9 *translate(const PixelShaderDef *ps)
     for (int t = 0; t < 4; t++)
         put("sampler2D s%d : register(s%d);\n", t, t);
     put("float4 main(float4 v0 : COLOR0, float4 v1 : COLOR1, float4 t0 : TEXCOORD0, float4 t1 : TEXCOORD1,\n"
-        "            float4 t2 : TEXCOORD2, float4 t3 : TEXCOORD3) : COLOR\n{\n");
-    put("  float4 V0 = v0, V1 = v1, R1 = 0;\n");
+        "            float4 t2 : TEXCOORD2, float4 t3 : TEXCOORD3, float t4 : TEXCOORD4) : COLOR\n{\n");
+    put("  float4 V0 = v0, V1 = v1, R1 = 0, FOG = float4(c[18].rgb, saturate(t4));\n");
     for (int t = 0; t < 4; t++) {
         /* PROJECT2D (1), the ordinary mode, divides by q as the NV2A (and xemu) does; the game's coordinates mostly
          * have q = 1, which the attribute defaults and the fixed-function path also give */
@@ -954,7 +956,10 @@ static int pixel_shader(void)
     }
     set_constant_color(16, ps->final_constant0);
     set_constant_color(17, ps->final_constant1);
-    set_constant_color(18, 0xff000000);  /* fog: colour black, factor 1 (no fog yet) */
+    float fog_start, fog_end;
+    unsigned fog_color = 0;
+    nv_fog(&fog_start, &fog_end, &fog_color);
+    set_constant_color(18, fog_color);  /* the fog colour; the factor comes with each vertex */
     IDirect3DDevice9_SetPixelShader(device, shader);
     return 1;
 }
@@ -1034,6 +1039,7 @@ static GpuVertex clip_point(const GpuVertex *a, const GpuVertex *b, int p)
     for (int s = 0; s < 4; s++)
         for (int i = 0; i < 4; i++)
             g.t[s][i] = a->t[s][i] + (b->t[s][i] - a->t[s][i]) * t;
+    g.fog = a->fog + (b->fog - a->fog) * t;
     return g;
 }
 

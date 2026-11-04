@@ -48,7 +48,10 @@ typedef struct {
     float x, y, z, rhw;
     unsigned diffuse, specular;
     float t[4][4];
+    float fog;  /* fog factor: 1 = none, 0 = all fog colour (the combiners' FOG.a) */
 } GpuVertex;
+/* port/d3d8.c: the game's linear fog, if on (start and end distances, colour ARGB); 0 when off */
+int nv_fog(float *start, float *end, unsigned *color);
 void gpu_draw(int primitive, const GpuVertex *v, unsigned count);  /* NV2A primitive numbering, 1..10 */
 void gpu_set_texture(int stage, const void *xbox_texture);
 void gpu_render_state(unsigned method, unsigned value);

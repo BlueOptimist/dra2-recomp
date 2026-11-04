@@ -9,16 +9,6 @@ $out = Join-Path $build 'native'
 New-Item -ItemType Directory -Force $out | Out-Null
 
 $cc = Join-Path $mingw 'i686-w64-mingw32-clang.exe'
-# the Xbox kernel exports (port/kernel.c): compiled first, gen_native.py routes the import slots to them
-& $cc -c -O1 -w (Join-Path $root 'decomp\port\kernel.c') -o (Join-Path $out 'kernel.obj')
-if ($LASTEXITCODE) { exit 1 }
-python -I (Join-Path $root 'tools\gen_native.py') (Join-Path $root 'decomp') $mingw
-if ($LASTEXITCODE) { exit 1 }
-& $cc -c -O1 -w (Join-Path $root 'decomp\port\native.c') -o (Join-Path $out 'native.obj')
-if ($LASTEXITCODE) { exit 1 }
-& $cc -c (Join-Path $out 'native_tables.s') -o (Join-Path $out 'native_tables.obj')
-if ($LASTEXITCODE) { exit 1 }
-
 # the port's platform layer; not game_fixes (decompiler repairs), startup (the recompiled entry point), xbox_stubs
 # (stand-ins for library functions the original code now provides itself), crt_math and cxx_runtime (the game's own C
 # runtime runs natively). Compiled here with optimisation: tools\build_all.ps1 builds its copies at -O0, and at -O0
@@ -32,6 +22,16 @@ $ports = foreach ($name in 'calls', 'crash', 'd3d8', 'dsound', 'gpu', 'nv2a', 'p
     if ($LASTEXITCODE) { "port/$name.c failed to compile"; exit 1 }
     $obj
 }
+# the Xbox kernel exports (port/kernel.c); then gen_native.py routes the import slots to them and hooks the library
+# functions the port objects above implement
+& $cc -c -O1 -w (Join-Path $root 'decomp\port\kernel.c') -o (Join-Path $out 'kernel.obj')
+if ($LASTEXITCODE) { exit 1 }
+python -I (Join-Path $root 'tools\gen_native.py') (Join-Path $root 'decomp') $mingw
+if ($LASTEXITCODE) { exit 1 }
+& $cc -c -O1 -w (Join-Path $root 'decomp\port\native.c') -o (Join-Path $out 'native.obj')
+if ($LASTEXITCODE) { exit 1 }
+& $cc -c (Join-Path $out 'native_tables.s') -o (Join-Path $out 'native_tables.obj')
+if ($LASTEXITCODE) { exit 1 }
 # the loader and the port, as a DLL above the Xbox range
 $dll = Join-Path $build 'dra2_native.dll'
 & $cc -shared -o $dll (Join-Path $out 'native.obj') (Join-Path $out 'native_tables.obj') (Join-Path $out 'kernel.obj') @ports `

@@ -82,6 +82,21 @@ static unsigned pack_color(const float *c)
 
 float nv_zscale = 16777215.0f;  /* 24-bit depth buffer */
 
+/* linear fog for the current draw (fog_begin): factor = (end - distance) / (end - start), clamped to 0..1 */
+static int fog_on;
+static float fog_end, fog_scale;
+
+static void fog_begin(void)
+{
+    float start, end;
+    unsigned color;
+    fog_on = nv_fog(&start, &end, &color);
+    if (fog_on)
+        fog_end = end, fog_scale = 1.0f / (end - start);
+}
+
+#define FOG_UNWRITTEN 3.0e38f
+
 static void make_vertex(const NvVec4 in[16], GpuVertex *g)
 {
     NvVec4 out[NV_OUTPUTS];
@@ -90,7 +105,14 @@ static void make_vertex(const NvVec4 in[16], GpuVertex *g)
         float c = i == NV_OUT_D0 || i == NV_OUT_D1 ? 1.0f : 0.0f;
         out[i].v[0] = out[i].v[1] = out[i].v[2] = c, out[i].v[3] = 1.0f;
     }
+    out[NV_OUT_FOG].v[0] = FOG_UNWRITTEN;
     nv_vsh_run(nv_program_start, (NvVec4 *)in, out);
+    g->fog = 1.0f;
+    if (fog_on) {
+        /* the distance: the program's oFog.x, or the eye depth (w) for a program that doesn't write it */
+        float d = out[NV_OUT_FOG].v[0] != FOG_UNWRITTEN ? out[NV_OUT_FOG].v[0] : out[NV_OUT_POS].v[3];
+        float f = (fog_end - d) * fog_scale;
+        g->fog = f < 0.0f ? 0.0f : f > 1.0f ? 1.0f : f;    }
     float w = out[NV_OUT_POS].v[3];
     g->x = out[NV_OUT_POS].v[0], g->y = out[NV_OUT_POS].v[1];
     g->z = out[NV_OUT_POS].v[2] / nv_zscale;
@@ -184,6 +206,7 @@ void nv_draw_indexed(unsigned prim, const unsigned *list, unsigned count)
     static unsigned tag[0x10000], slot[0x10000], generation;
     if (!++generation)
         __builtin_memset(tag, 0, sizeof tag), generation = 1;
+    fog_begin();
     NvVec4 in[16];
     for (unsigned i = 0; i < count; i++) {
         unsigned h = list[i] & 0xffff;
@@ -203,6 +226,7 @@ void nv_draw_arrays(unsigned prim, unsigned first, unsigned count)
 {
     if (count > 0x10000)
         count = 0x10000;
+    fog_begin();
     NvVec4 in[16];
     for (unsigned i = 0; i < count; i++) {
         vertex_inputs(first + i, in);
@@ -229,6 +253,7 @@ static void draw_inline(unsigned prim)
     unsigned count = inline_count / stride_words;
     if (count > 0x10000)
         count = 0x10000;
+    fog_begin();
     NvVec4 in[16];
     for (unsigned i = 0; i < count; i++) {
         const unsigned char *p = (const unsigned char *)&inline_words[i * stride_words];

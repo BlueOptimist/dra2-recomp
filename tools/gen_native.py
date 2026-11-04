@@ -44,7 +44,7 @@ def main():
     nm = os.path.join(mingw_bin, "llvm-nm.exe")
     hooks, undefined, seen = [], set(), set()
     for name in PORT_OBJECTS:
-        obj = os.path.join(build, "obj", f"port_{name}.obj")
+        obj = os.path.join(out_dir, f"port_{name}.obj")  # tools/build_native.ps1 compiles them first
         for line in subprocess.run([nm, obj], capture_output=True, text=True).stdout.splitlines():
             parts = line.split()
             if len(parts) == 2 and parts[0] == "U":

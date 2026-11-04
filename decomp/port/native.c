@@ -259,6 +259,8 @@ static const struct { unsigned address; void *target; const char *what; } native
 
 static void link_image(void)
 {
+    extern int nv_native_image;  /* port/d3d8.c: the original code's own variables are at their Xbox addresses */
+    nv_native_image = 1;
     int kernel = 0, hooks = 0;
     for (struct native_pair *k = native_kernel; k->address; k++, kernel++)
         *(void **)k->address = k->target;

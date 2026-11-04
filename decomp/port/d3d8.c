@@ -432,7 +432,7 @@ static void fvf_vertex(const unsigned char *p, GpuVertex *g)
     const float *f = (const float *)p;
     g->x = f[0], g->y = f[1], g->z = f[2], g->rhw = f[3];
     p += 16;
-    g->diffuse = 0xffffffff, g->specular = 0;
+    g->diffuse = 0xffffffff, g->specular = 0, g->fog = 1.0f;
     if (current_fvf & FVF_DIFFUSE)
         g->diffuse = *(const DWORD *)p, p += 4;
     if (current_fvf & FVF_SPECULAR)
@@ -505,6 +505,27 @@ void __fastcall D3D8__D3DDevice_SetRenderState_Simple(DWORD header, DWORD value)
 
 /* CullMode: the vertices reach Direct3D 9 already in screen space, so culling stays off for now */
 void __stdcall D3D8__D3DDevice_SetRenderState_CullMode(int mode) { (void)mode; }
+
+/* fog: the game's fog setter (FUN_0019f630, for MaloMyotismon's effect) writes Direct3D's deferred render states
+ * itself, FogEnable, FogTableMode (3, linear), FogStart and FogEnd, and sets the colour through FogColor. Direct3D
+ * would push them at the next draw; the draws here read them instead, in D3D__RenderState (0x238760, the original
+ * code's own memory), states 92-95. Native build only (native.c sets nv_native_image): the recompiled build keeps
+ * those variables elsewhere, and draws without fog. */
+int nv_native_image;
+static const volatile unsigned *const fog_states = (const volatile unsigned *)0x2388d0;
+static unsigned fog_color;
+void __stdcall D3D8__D3DDevice_SetRenderState_FogColor(unsigned color) { fog_color = color; }
+
+int nv_fog(float *start, float *end, unsigned *color)
+{
+    if (!nv_native_image || !fog_states[0] || fog_states[1] != 3)  /* FogEnable, FogTableMode linear */
+        return 0;
+    union { unsigned u; float f; } s = { fog_states[2] }, e = { fog_states[3] };
+    if (!(e.f > s.f))
+        return 0;
+    *start = s.f, *end = e.f, *color = fog_color;
+    return 1;
+}
 
 void __stdcall D3D8__D3DDevice_SetTexture(int stage, int *texture) { gpu_set_texture(stage, texture); }
 
