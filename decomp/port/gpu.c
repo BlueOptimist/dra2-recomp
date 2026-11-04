@@ -209,6 +209,7 @@ static DWORD source_sum(const CachedTexture *c)
 }
 
 static void decode(CachedTexture *c, const XTexture *x);
+static void dxt_block(D3DFORMAT f, const unsigned char *b, DWORD out[16]);
 
 static CachedTexture *texture_for(const XTexture *x)
 {
@@ -292,15 +293,35 @@ static void decode(CachedTexture *c, const XTexture *x)
         unsigned block = format == 0x0c ? 8 : 16, bw = (w + 3) / 4, bh = (h + 3) / 4;
         if (!texture_fits(x, bw * bh * block))
             return;
+        c->bytes = bw * bh * block;
+        D3DLOCKED_RECT lr;
+        if (w % 4 || h % 4) {
+            /* Direct3D 9 wants DXT sizes in whole blocks; the fighters' health and evolution gauges are 2x16, so
+             * those are decompressed here */
+            if (FAILED(IDirect3DDevice9_CreateTexture(device, w, h, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &c->texture,
+                                                      0)))
+                return;
+            if (SUCCEEDED(IDirect3DTexture9_LockRect(c->texture, 0, &lr, 0, 0))) {
+                for (unsigned by = 0; by < bh; by++)
+                    for (unsigned bx = 0; bx < bw; bx++) {
+                        DWORD texels[16];
+                        dxt_block(f, src + (by * bw + bx) * block, texels);
+                        for (unsigned y = 0; y < 4 && by * 4 + y < h; y++)
+                            for (unsigned xx = 0; xx < 4 && bx * 4 + xx < w; xx++)
+                                ((DWORD *)((unsigned char *)lr.pBits + (by * 4 + y) * lr.Pitch))[bx * 4 + xx] =
+                                    texels[y * 4 + xx];
+                    }
+                IDirect3DTexture9_UnlockRect(c->texture, 0);
+            }
+            return;
+        }
         if (FAILED(IDirect3DDevice9_CreateTexture(device, w, h, 1, 0, f, D3DPOOL_MANAGED, &c->texture, 0)))
             return;
-        D3DLOCKED_RECT lr;
         if (SUCCEEDED(IDirect3DTexture9_LockRect(c->texture, 0, &lr, 0, 0))) {
             for (unsigned by = 0; by < bh; by++)
                 memcpy((unsigned char *)lr.pBits + by * lr.Pitch, src + by * bw * block, bw * block);
             IDirect3DTexture9_UnlockRect(c->texture, 0);
         }
-        c->bytes = bw * bh * block;
         return;
     }
     DWORD probe;
@@ -332,7 +353,8 @@ static void decode(CachedTexture *c, const XTexture *x)
 /* the Xbox texture last bound to a stage (D3DDevice_GetTexture2) */
 const void *gpu_get_texture(int stage) { return stage >= 0 && stage < 4 ? bound[stage].xbox : 0; }
 
-/* one 4x4 DXT1/3/5 block to ARGB (for dump_texture only: the game's DXT textures go to Direct3D as they are) */
+/* one 4x4 DXT1/3/5 block to ARGB, for dump_texture and for DXT textures not in whole blocks (decode); the others go to
+ * Direct3D as they are */
 static void dxt_block(D3DFORMAT f, const unsigned char *b, DWORD out[16])
 {
     const unsigned char *c = f == D3DFMT_DXT1 ? b : b + 8;
