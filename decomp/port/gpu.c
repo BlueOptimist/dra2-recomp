@@ -22,26 +22,71 @@ static IDirect3D9 *d3d;
 static IDirect3DDevice9 *device;
 static int in_scene;
 
+/* Display: DRA2_WINDOW=1..4 opens a window at that multiple of the game's resolution (default 2), and
+ * DRA2_WINDOW=fullscreen a borderless window covering the monitor. Alt+Enter and F11 switch between the two. The
+ * picture keeps the game's 4:3 shape, with black bars, whatever the window's size. */
+static int fullscreen;
+static WINDOWPLACEMENT windowed_placement = { sizeof(WINDOWPLACEMENT) };
+
+static void set_fullscreen(int on)
+{
+    if (on == fullscreen)
+        return;
+    if (on) {
+        MONITORINFO mi = { sizeof mi };
+        GetWindowPlacement(window, &windowed_placement);
+        GetMonitorInfoA(MonitorFromWindow(window, MONITOR_DEFAULTTOPRIMARY), &mi);
+        SetWindowLongA(window, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+        SetWindowPos(window, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right - mi.rcMonitor.left,
+                     mi.rcMonitor.bottom - mi.rcMonitor.top, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+    } else {
+        SetWindowLongA(window, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_VISIBLE);
+        SetWindowPlacement(window, &windowed_placement);
+        SetWindowPos(window, 0, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+    }
+    fullscreen = on;
+    InvalidateRect(window, 0, TRUE);
+}
+
 static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     if (msg == WM_CLOSE || msg == WM_DESTROY)
         ExitProcess(0);
+    if ((msg == WM_SYSKEYDOWN && wp == VK_RETURN && (lp & (1 << 29))) || (msg == WM_KEYDOWN && wp == VK_F11)) {
+        if (!(lp & (1 << 30)))  /* not a key repeat */
+            set_fullscreen(!fullscreen);
+        return 0;
+    }
+    if (msg == WM_SYSCHAR && wp == VK_RETURN)
+        return 0;  /* no beep for Alt+Enter */
+    if (msg == WM_SIZE)
+        InvalidateRect(hwnd, 0, TRUE);  /* repaint the bars around the picture */
+    if (msg == WM_SETCURSOR && fullscreen && LOWORD(lp) == HTCLIENT) {
+        SetCursor(0);
+        return TRUE;
+    }
     return DefWindowProcA(hwnd, msg, wp, lp);
 }
 
-/* the window (shown at twice the game's resolution) and a device rendering at the game's resolution */
+/* the window and a device rendering at the game's resolution */
 int gpu_open(unsigned width, unsigned height)
 {
+    char mode[16] = "";
+    GetEnvironmentVariableA("DRA2_WINDOW", mode, sizeof mode);
+    int scale = mode[0] >= '1' && mode[0] <= '4' && !mode[1] ? mode[0] - '0' : 2;
     WNDCLASSA wc = { 0 };
     wc.lpfnWndProc = window_proc;
     wc.hInstance = GetModuleHandleA(0);
     wc.hCursor = LoadCursorA(0, (LPCSTR)IDC_ARROW);
+    wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
     wc.lpszClassName = "DRA2Window";
     RegisterClassA(&wc);
-    RECT r = { 0, 0, (LONG)width * 2, (LONG)height * 2 };
+    RECT r = { 0, 0, (LONG)width * scale, (LONG)height * scale };
     AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
     window = CreateWindowExA(0, wc.lpszClassName, "Digimon Rumble Arena 2", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
                              CW_USEDEFAULT, CW_USEDEFAULT, r.right - r.left, r.bottom - r.top, 0, 0, wc.hInstance, 0);
+    if (!_stricmp(mode, "fullscreen"))
+        set_fullscreen(1);
 
     d3d = Direct3DCreate9(D3D_SDK_VERSION);
     if (!d3d) {
@@ -1113,7 +1158,19 @@ void gpu_present(void)
             in_scene = 0;
         }
         snapshot();
-        IDirect3DDevice9_Present(device, 0, 0, 0, 0);
+        /* the largest 4:3 rectangle in the middle of the window */
+        RECT client, picture;
+        GetClientRect(window, &client);
+        LONG w = client.right, h = client.bottom;
+        if (w * 3 > h * 4)
+            w = h * 4 / 3;
+        else
+            h = w * 3 / 4;
+        picture.left = (client.right - w) / 2;
+        picture.top = (client.bottom - h) / 2;
+        picture.right = picture.left + w;
+        picture.bottom = picture.top + h;
+        IDirect3DDevice9_Present(device, 0, w > 0 && h > 0 ? &picture : 0, 0, 0);
     }
     pump_messages();
 }

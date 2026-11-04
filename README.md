@@ -12,7 +12,15 @@ To work on it you need your own copy of the game:
 
 ### Playing
 
-Double-click **`Play.cmd`** (it runs `tools/play.ps1`). Its menu can play with or without sound, record the sound to `logs/sound.wav`, rebuild the game, and open the saves folder or the last log. On the first run it extracts the `.iso` in this folder to `extracted/` and builds `decomp/build/dra2_native.exe` if they are missing. Building needs the decompiled code in `decomp/build`, which only exists on a machine that has run the pipeline. Saves go to `saves/` and are kept between runs. `Play.cmd -Now` skips the menu.
+Double-click **`Play.cmd`** to open the launcher (`tools/launcher.ps1`, a WPF window). It has six pages and a PLAY button:
+- **Home:** whether the game data, the build and saves are ready, plus quick settings.
+- **Display:** a 1×–4× window or fullscreen. Alt+Enter or F11 switches in game.
+- **Audio:** sound on or off, and recording to `logs/sound.wav`.
+- **Controls:** the keyboard map.
+- **Saves:** the saves folder, with backups to `save_backups/`.
+- **Advanced:** the game data folder, extracting the disc image, rebuilding the game and opening the last log.
+
+The launcher minimises while the game runs, then reports how the run ended, including any crash lines from `logs/last_run.txt`. Its settings live in `launcher_settings.json`, and saves go to `saves/`; both stay local. Building needs the decompiled code in `decomp/build`, which only exists on a machine that has run the pipeline. `Play.cmd -Now` starts the game without the launcher, and `Play.cmd -Console` opens a text menu instead (`tools/play.ps1`).
 
 Keyboard (player 1): arrows move, Z = A (jump), X = B (grab/throw), C = X (special), V = Y, Enter = Start, Esc = Back, Q/W = triggers, E/R = White/Black, I J K L = right stick. Windows controllers work too, and players 2-4 use them.
 
