@@ -1,4 +1,4 @@
-﻿# The graphical launcher for the native build (decomp/build/dra2_native.exe), started by Play.cmd.
+﻿# The graphical launcher for the native build (decomp/build/dra2_native.exe), started by Play.exe (or Play.cmd).
 # A WPF window: Home (status, quick settings), Display, Audio, Controls, Saves and Advanced pages, and PLAY.
 # Settings are kept in <repo>\launcher_settings.json; saves in <repo>\saves; logs in <repo>\logs.
 # Needs Windows PowerShell 5.1 in STA mode (Play.cmd starts it that way).
@@ -393,6 +393,7 @@ function Save-Settings { $settings | ConvertTo-Json | Set-Content $settingsFile 
 </Window>
 '@
 $window = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $xaml))
+try { $window.Icon = [Windows.Media.Imaging.BitmapFrame]::Create([Uri](Join-Path $PSScriptRoot 'launcher\icon.ico')) } catch { }
 $ui = @{}
 $xaml.SelectNodes('//*[@*[local-name()="Name"]]') | ForEach-Object {
     $name = $_.Attributes | Where-Object { $_.LocalName -eq 'Name' } | Select-Object -First 1 -ExpandProperty Value

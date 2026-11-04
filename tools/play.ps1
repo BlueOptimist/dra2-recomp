@@ -9,7 +9,7 @@ $exe = Join-Path $root 'decomp\build\dra2_native.exe'
 $data = Join-Path $root 'extracted'
 $saves = Join-Path $root 'saves'
 $logs = Join-Path $root 'logs'
-$Host.UI.RawUI.WindowTitle = 'Digimon Rumble Arena 2 (native build)'
+try { $Host.UI.RawUI.WindowTitle = 'Digimon Rumble Arena 2 (native build)' } catch { }  # no console with Play.exe -Now
 
 function Show-Controls {
     ''

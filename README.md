@@ -12,7 +12,7 @@ To work on it you need your own copy of the game:
 
 ### Playing
 
-Double-click **`Play.cmd`** to open the launcher (`tools/launcher.ps1`, a WPF window). It has six pages and a PLAY button:
+Double-click **`Play.exe`** to open the launcher (`tools/launcher.ps1`, a WPF window). `Play.exe` is built into this folder by `tools/launcher/build.ps1` from `tools/launcher/play.c`; its icon is drawn by `tools/launcher/make_icon.ps1`. It isn't in the repository, so `Play.cmd` does the same until it's built. It has six pages and a PLAY button:
 - **Home:** whether the game data, the build and saves are ready, plus quick settings.
 - **Display:** a 1×–4× window or fullscreen. Alt+Enter or F11 switches in game.
 - **Audio:** sound on or off, and recording to `logs/sound.wav`.
@@ -20,7 +20,7 @@ Double-click **`Play.cmd`** to open the launcher (`tools/launcher.ps1`, a WPF wi
 - **Saves:** the saves folder, with backups to `save_backups/`.
 - **Advanced:** the game data folder, extracting the disc image, rebuilding the game and opening the last log.
 
-The launcher minimises while the game runs, then reports how the run ended, including any crash lines from `logs/last_run.txt`. Its settings live in `launcher_settings.json`, and saves go to `saves/`; both stay local. Building needs the decompiled code in `decomp/build`, which only exists on a machine that has run the pipeline. `Play.cmd -Now` starts the game without the launcher, and `Play.cmd -Console` opens a text menu instead (`tools/play.ps1`).
+The launcher minimises while the game runs, then reports how the run ended, including any crash lines from `logs/last_run.txt`. Its settings live in `launcher_settings.json`, and saves go to `saves/`; both stay local. Building needs the decompiled code in `decomp/build`, which only exists on a machine that has run the pipeline. `Play.exe -Now` (or `Play.cmd -Now`) starts the game without the launcher, and `-Console` opens a text menu instead (`tools/play.ps1`).
 
 Keyboard (player 1): arrows move, Z = A (jump), X = B (grab/throw), C = X (special), V = Y, Enter = Start, Esc = Back, Q/W = triggers, E/R = White/Black, I J K L = right stick. Windows controllers work too, and players 2-4 use them.
 
