@@ -423,8 +423,8 @@ function Save-Settings { $settings | ConvertTo-Json | Set-Content $settingsFile 
           <CheckBox x:Name="quickIntro" Style="{StaticResource Switch}" Content="Quick start: skip the studio logos and wait less at the copyright screen"/>
           <TextBlock Text="TOOLS" Style="{StaticResource Label}"/>
           <WrapPanel>
-            <Button x:Name="rebuild" Style="{StaticResource Btn}" Content="Rebuild the game"/>
             <Button x:Name="extract" Style="{StaticResource Btn}" Content="Extract the disc image"/>
+            <Button x:Name="rebuild" Style="{StaticResource Btn}" Content="Rebuild the game"/>
             <Button x:Name="openLog" Style="{StaticResource Btn}" Content="Open the last game log"/>
             <Button x:Name="openRepo" Style="{StaticResource Btn}" Content="Open the port folder"/>
           </WrapPanel>
