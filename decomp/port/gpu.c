@@ -191,7 +191,12 @@ int gpu_open(unsigned width, unsigned height)
     pp.Windowed = TRUE;
     pp.EnableAutoDepthStencil = TRUE;
     pp.AutoDepthStencilFormat = D3DFMT_D24S8;
-    pp.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;  /* the game paces itself (frame limiter) */
+    /* the game paces itself (its frame limiter, 60 a second). VSync: DRA2_VSYNC=1 also waits for the display's refresh
+     * to show each frame, so no frame is shown torn across two; unset or 0 shows it at once. */
+    char vsync[8] = "";
+    GetEnvironmentVariableA("DRA2_VSYNC", vsync, sizeof vsync);
+    int synced = atoi(vsync) > 0;
+    pp.PresentationInterval = synced ? D3DPRESENT_INTERVAL_ONE : D3DPRESENT_INTERVAL_IMMEDIATE;
     msaa = msaa_setting(d3d);
     pp.MultiSampleType = msaa;
     HRESULT hr = IDirect3D9_CreateDevice(d3d, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, window,
@@ -203,7 +208,7 @@ int gpu_open(unsigned width, unsigned height)
         printf("[gpu] CreateDevice failed: %08lx\n", (unsigned long)hr);
         return 0;
     }
-    printf("[gpu] Direct3D 9 device %ux%u\n", render_width, render_height);
+    printf("[gpu] Direct3D 9 device %ux%u%s\n", render_width, render_height, synced ? ", vsync" : "");
     if (msaa) {
         printf("[gpu] anti-aliasing: %dx MSAA\n", (int)msaa);
         IDirect3DDevice9_SetRenderState(device, D3DRS_MULTISAMPLEANTIALIAS, TRUE);
