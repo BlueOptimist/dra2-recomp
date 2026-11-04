@@ -1,4 +1,4 @@
-// Play.exe's icon and version information (tools/launcher/build.ps1)
+// DRA 2.exe's icon and version information (tools/launcher/build.ps1)
 #include <winver.h>
 
 1 ICON "icon.ico"
@@ -15,7 +15,7 @@ BEGIN
     BEGIN
       VALUE "FileDescription", "Digimon Rumble Arena 2 - Windows port launcher"
       VALUE "ProductName", "dra2-recomp"
-      VALUE "OriginalFilename", "Play.exe"
+      VALUE "OriginalFilename", "DRA 2.exe"
       VALUE "FileVersion", "1.0"
       VALUE "ProductVersion", "1.0"
     END

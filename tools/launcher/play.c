@@ -1,8 +1,8 @@
-/* Play.exe: double-click to open the launcher (tools/launcher.ps1) without a console window. Built into the repository
+/* DRA 2.exe: double-click to open the launcher (tools/launcher.ps1) without a console window. Built into the repository
  * root by tools/launcher/build.ps1.
- *   Play.exe            the launcher window
- *   Play.exe -Now       start the game straight away (tools/play.ps1 -Now)
- *   Play.exe -Console   the text menu (tools/play.ps1), in a console window
+ *   DRA 2.exe             the launcher window
+ *   "DRA 2.exe" -Now      start the game straight away (tools/play.ps1 -Now)
+ *   "DRA 2.exe" -Console  the text menu (tools/play.ps1), in a console window
  * It only starts Windows PowerShell 5.1, which comes with Windows, and does not wait for it. */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>  /* built with -municode, which defines UNICODE */
@@ -17,10 +17,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR args, int show
 {
     (void)instance, (void)previous, (void)show;
     wchar_t folder[MAX_PATH], script[MAX_PATH], shell[MAX_PATH], command[4 * MAX_PATH];
-    /* the folder Play.exe is in: the repository root */
+    /* the folder DRA 2.exe is in: the repository root */
     DWORD n = GetModuleFileNameW(0, folder, MAX_PATH);
     if (!n || n >= MAX_PATH) {
-        fail(L"Can't find the folder Play.exe is in.");
+        fail(L"Can't find the folder DRA 2.exe is in.");
         return 1;
     }
     wchar_t *slash = wcsrchr(folder, L'\\');
@@ -30,17 +30,17 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR args, int show
     while (*args == L' ' || *args == L'\t')
         args++;
     for (size_t end = wcslen(args); end && (args[end - 1] == L' ' || args[end - 1] == L'\t'); end--)
-        args[end - 1] = 0;  /* "Play.exe -Now " (a shortcut's arguments can end in a space) */
+        args[end - 1] = 0;  /* "-Now " (a shortcut's arguments can end in a space) */
     int now = !_wcsicmp(args, L"-Now"), console = !_wcsicmp(args, L"-Console");
     if (*args && !now && !console) {
-        fail(L"Play.exe takes no options, -Now (start the game at once) or -Console (the text menu).");
+        fail(L"DRA 2.exe takes no options, -Now (start the game at once) or -Console (the text menu).");
         return 1;
     }
     _snwprintf(script, MAX_PATH, L"%s\\tools\\%s", folder, *args ? L"play.ps1" : L"launcher.ps1");
     script[MAX_PATH - 1] = 0;
     if (GetFileAttributesW(script) == INVALID_FILE_ATTRIBUTES) {
         wchar_t text[MAX_PATH + 64];
-        _snwprintf(text, MAX_PATH + 64, L"Can't find %s.\n\nPlay.exe has to stay in the port's folder.", script);
+        _snwprintf(text, MAX_PATH + 64, L"Can't find %s.\n\nDRA 2.exe has to stay in the port's folder.", script);
         text[MAX_PATH + 63] = 0;
         fail(text);
         return 1;

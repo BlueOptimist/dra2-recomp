@@ -15,6 +15,8 @@
 
 !/tools/
 /tools/__pycache__/
+# an icon made from your own picture (make_icon.ps1 -Image), such as the game's cover art: never in the repository
+/tools/launcher/cover.ico
 
 !/decomp/
 /decomp/*

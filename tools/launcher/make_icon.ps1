@@ -1,10 +1,39 @@
 # Draw tools/launcher/icon.ico: an orange hexagon with a "2" on a dark-blue tile, inside a ring of green "binary"
 # dashes, in the launcher's colours. Sizes 256, 48, 32 and 16, stored as PNG (Windows Vista and later).
 # Usage: powershell -File tools\launcher\make_icon.ps1
-Add-Type -AssemblyName System.Drawing
-$out = Join-Path $PSScriptRoot 'icon.ico'
+#        powershell -File tools\launcher\make_icon.ps1 -Image <picture>
+#   -Image: make tools/launcher/cover.ico from a picture of your own instead (any format Windows can open: png, jpg,
+#   webp...; it's cropped to a square). cover.ico stays out of the repository; when it's there, build.ps1 and the
+#   launcher window use it instead of icon.ico.
+param([string]$Image)
+Add-Type -AssemblyName System.Drawing, PresentationCore
+$out = Join-Path $PSScriptRoot $(if ($Image) { 'cover.ico' } else { 'icon.ico' })
+
+if ($Image) {
+    # Windows Imaging Component opens more formats (webp, heic...) than System.Drawing; hand System.Drawing a PNG
+    $decoder = [Windows.Media.Imaging.BitmapDecoder]::Create([Uri](Resolve-Path $Image).Path, 'None', 'OnLoad')
+    $png = New-Object Windows.Media.Imaging.PngBitmapEncoder
+    $png.Frames.Add([Windows.Media.Imaging.BitmapFrame]::Create($decoder.Frames[0]))
+    $buffer = New-Object IO.MemoryStream
+    $png.Save($buffer)
+    $script:picture = [Drawing.Image]::FromStream($buffer)
+}
+
+function Draw-Picture([int]$size) {
+    $bmp = New-Object Drawing.Bitmap $size, $size
+    $g = [Drawing.Graphics]::FromImage($bmp)
+    $g.InterpolationMode = 'HighQualityBicubic'; $g.PixelOffsetMode = 'HighQuality'; $g.SmoothingMode = 'AntiAlias'
+    $side = [math]::Min($picture.Width, $picture.Height)  # the middle square of the picture
+    $from = New-Object Drawing.Rectangle ([int](($picture.Width - $side) / 2)), ([int](($picture.Height - $side) / 2)), $side, $side
+    $g.DrawImage($picture, (New-Object Drawing.Rectangle 0, 0, $size, $size), $from, 'Pixel')
+    $g.Dispose()
+    $stream = New-Object IO.MemoryStream
+    $bmp.Save($stream, [Drawing.Imaging.ImageFormat]::Png); $bmp.Dispose()
+    return , $stream.ToArray()
+}
 
 function Draw([int]$size) {
+    if ($Image) { return , (Draw-Picture $size) }
     $bmp = New-Object Drawing.Bitmap $size, $size
     $g = [Drawing.Graphics]::FromImage($bmp)
     $g.SmoothingMode = 'AntiAlias'; $g.TextRenderingHint = 'AntiAliasGridFit'
@@ -60,6 +89,6 @@ for ($i = 0; $i -lt $sizes.Count; $i++) {                                       
     $writer.Write([uint32]$images[$i].Length); $writer.Write([uint32]$offset)
     $offset += $images[$i].Length
 }
-foreach ($image in $images) { $writer.Write($image) }
+foreach ($entry in $images) { $writer.Write($entry) }  # not $image: that's -Image, a string
 [IO.File]::WriteAllBytes($out, $file.ToArray())
 "wrote $out ($($file.Length) bytes)"
