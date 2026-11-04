@@ -1,8 +1,8 @@
 # Text-mode launcher for the native build (decomp/build/dra2_native.exe): a small menu to play, rebuild and find saves
-# and logs. "Play.cmd -Console" opens it (Play.cmd alone opens the graphical one, tools/launcher.ps1); "Play.cmd -Now"
-# plays at once.
+# and logs. "DRA 2.exe" -Console opens it ("DRA 2.exe" alone opens the graphical one, tools/launcher.ps1); "DRA 2.exe"
+# -Now plays at once.
 #   saves: <repo>\saves (kept between runs)   logs: <repo>\logs\last_run.txt (and sound.wav when recording)
-param([switch]$Now, [switch]$Console)  # -Console: this menu (Play.cmd -Console)
+param([switch]$Now, [switch]$Console)  # -Console: this menu ("DRA 2.exe" -Console)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $exe = Join-Path $root 'decomp\build\dra2_native.exe'

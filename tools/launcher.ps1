@@ -1,7 +1,7 @@
-﻿# The graphical launcher for the native build (decomp/build/dra2_native.exe), started by "DRA 2.exe" (or Play.cmd).
+﻿# The graphical launcher for the native build (decomp/build/dra2_native.exe), started by "DRA 2.exe".
 # A WPF window: Home (status, quick settings), Display, Audio, Controls, Saves and Advanced pages, and PLAY.
 # Settings are kept in <repo>\launcher_settings.json; saves in <repo>\saves; logs in <repo>\logs.
-# Needs Windows PowerShell 5.1 in STA mode (Play.cmd starts it that way).
+# Needs Windows PowerShell 5.1 in STA mode ("DRA 2.exe" starts it that way).
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Windows.Forms
 # An app ID of its own, so the taskbar shows the launcher's icon rather than grouping it under PowerShell's

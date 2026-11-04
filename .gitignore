@@ -7,7 +7,6 @@
 !/.gitignore
 !/.gitattributes
 !/README.md
-!/Play.cmd
 !/.github/
 
 # vendored open-source code, unmodified, with its license (Lua 5.0.3: MIT, see third_party/lua-5.0.3/COPYRIGHT)

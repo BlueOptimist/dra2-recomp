@@ -28,7 +28,14 @@ What you get: the game's own code, from your disc, running natively on Windows. 
    ```
    git clone https://github.com/BlueOptimist/dra2-recomp.git
    ```
-2. **Open the launcher:** double-click `Play.cmd`. Its Home page shows three cards: game data, build and saves. The first two say *Missing* and *Not built* on a fresh clone.
+2. **Get the launcher, `DRA 2.exe`.** It isn't in the repository. Either:
+   - **Download it:** on GitHub, open the repository's Actions tab, pick the latest green run and download **DRA 2 launcher**. Unzip it and put `DRA 2.exe` in the repository folder.
+   - **Build it** with the compiler from above:
+     ```
+     powershell -ExecutionPolicy Bypass -File tools\launcher\build.ps1
+     ```
+
+   Then double-click `DRA 2.exe`. It has to stay in the repository folder, and you can pin it or make a shortcut to it. Its Home page shows three cards: game data, build and saves. The first two say *Missing* and *Not built* on a fresh clone.
 3. **Extract the disc:** Advanced → **Extract the disc image**. If there's an `.iso` in the repository folder, it uses that one; otherwise it asks for it. It writes `extracted/` (2,863 files, about 1.6 GB) and takes a few minutes. The image itself is only read. From a terminal instead:
    ```
    python -I tools\xdvdfs_extract.py "D:\path\to\Digimon Rumble Arena 2 (USA).iso" extracted
@@ -40,18 +47,17 @@ What you get: the game's own code, from your disc, running natively on Windows. 
    It ends with `linked ...dra2_native.dll (... KB) and ...dra2_native.exe`.
 5. **Play:** the Home cards now say *Ready*. Press **PLAY**. Fullscreen, resolution, picture shape and controls are on the launcher's pages (below). Settings and saves stay in this folder (`launcher_settings.json`, `saves/`).
 
-**Optional: the `DRA 2.exe` launcher.** It's the same launcher as `Play.cmd`, but as a program with an icon, for a desktop shortcut or the taskbar. Each GitHub Actions run builds one: open the repository's Actions tab, pick the latest green run, download **DRA 2 launcher**, and put `DRA 2.exe` in this folder. Or build it yourself: `powershell -File tools\launcher\build.ps1`.
-
 **If something goes wrong:**
 - *`python` opens the Microsoft Store or isn't found:* reinstall Python with *Add python.exe to PATH* ticked, or turn off the `python.exe` App execution alias in Windows Settings.
 - *The build says llvm-mingw isn't found:* check that the unzipped folder name starts with `llvm-mingw-` and is in one of the places listed above, or set `DRA2_MINGW`.
 - *The build says `default.xbe` is missing:* extract first. If you pointed Advanced → game data folder somewhere else, the launcher's Rebuild uses that folder; from a terminal, set `DRA2_DATA` to it.
 - *The game closes or shows a crash message:* Advanced → **Open the last game log** (`logs/last_run.txt`). Its last lines say what went wrong. When reporting a problem, include them.
-- *Scripts won't run ("running scripts is disabled"):* use `Play.cmd`, which passes `-ExecutionPolicy Bypass` itself. Or run the commands above as written.
+- *Scripts won't run ("running scripts is disabled"):* run the commands above as written: `-ExecutionPolicy Bypass` lets them run. `DRA 2.exe` passes it itself.
+- *Windows SmartScreen warns about `DRA 2.exe`:* it's unsigned. *More info → Run anyway*, or build it yourself (step 2).
 
 ### Playing
 
-Double-click **`DRA 2.exe`** to open the launcher (`tools/launcher.ps1`, a WPF window). `DRA 2.exe` is built into this folder by `tools/launcher/build.ps1` from `tools/launcher/play.c`. It isn't in the repository. Each CI run on GitHub (the Actions tab) builds one with the drawn icon as the **DRA 2 launcher** download; put it in this folder. Until you have it, `Play.cmd` does the same. Its icon is drawn by `tools/launcher/make_icon.ps1`. To use a picture of your own instead, such as the game's cover, run `make_icon.ps1 -Image <picture>` and then `build.ps1`. That writes `tools/launcher/cover.ico`, which stays out of the repository and is also used for the launcher window. The launcher has six pages and a PLAY button:
+Double-click **`DRA 2.exe`** to open the launcher (`tools/launcher.ps1`, a WPF window). `DRA 2.exe` is built into this folder by `tools/launcher/build.ps1` from `tools/launcher/play.c`. It isn't in the repository. Each CI run on GitHub (the Actions tab) builds one with the drawn icon as the **DRA 2 launcher** download; put it in this folder. Its icon is drawn by `tools/launcher/make_icon.ps1`. To use a picture of your own instead, such as the game's cover, run `make_icon.ps1 -Image <picture>` and then `build.ps1`. That writes `tools/launcher/cover.ico`, which stays out of the repository and is also used for the launcher window. The launcher has six pages and a PLAY button:
 - **Home:** whether the game data, the build and saves are ready, plus quick settings.
 - **Display:** a 1×–4× window or fullscreen (Alt+Enter or F11 switches in game). The resolution is 1080p by default, or 480p (the Xbox's), 720p, 1440p or 4K. Anti-aliasing (MSAA) smooths the 3D edges: 4× by default, or off (as on the Xbox), 2× or 8×. The picture shape is 4:3 as on the Xbox, or 16:10, 16:9 or 21:9, which show more of each scene at the sides without stretching it. There's also the Xbox's soft display, on by default.
 - **Quick start** (on the Advanced page, on by default): the copyright screen shows for a second instead of five, and the Bandai and Black Ship logos are skipped, so the title comes up about 14 seconds sooner. The game's own loading is already quick (an arena loads in about 0.2 s); the rest of the wait is screens that run for a set time. The game tips screen before a fight stays up to 10 seconds, and A skips it, as on the Xbox.
@@ -60,7 +66,7 @@ Double-click **`DRA 2.exe`** to open the launcher (`tools/launcher.ps1`, a WPF w
 - **Saves:** the saves folder, with backups to `save_backups/`.
 - **Advanced:** the game data folder, extracting the disc image, rebuilding the game and opening the last log.
 
-The launcher minimises while the game runs, then reports how the run ended, including any crash lines from `logs/last_run.txt`. Its settings live in `launcher_settings.json`, and saves go to `saves/`; both stay local. The native build needs only the port's sources, the extracted `default.xbe` and `analysis/native_symbols.tsv`: the Xbox library functions the port replaces and the kernel imports, by address. `tools/gen_native.py` rewrites that file from the Ghidra project's `analysis/data_symbols.tsv` wherever the analysis pipeline has run. (The recompiled build, `decomp/build/dra2.exe`, needs the whole pipeline.) `"DRA 2.exe" -Now` (or `Play.cmd -Now`) starts the game without the launcher, and `-Console` opens a text menu instead (`tools/play.ps1`).
+The launcher minimises while the game runs, then reports how the run ended, including any crash lines from `logs/last_run.txt`. Its settings live in `launcher_settings.json`, and saves go to `saves/`; both stay local. The native build needs only the port's sources, the extracted `default.xbe` and `analysis/native_symbols.tsv`: the Xbox library functions the port replaces and the kernel imports, by address. `tools/gen_native.py` rewrites that file from the Ghidra project's `analysis/data_symbols.tsv` wherever the analysis pipeline has run. (The recompiled build, `decomp/build/dra2.exe`, needs the whole pipeline.) `"DRA 2.exe" -Now` starts the game without the launcher, and `-Console` opens a text menu instead (`tools/play.ps1`).
 
 Keyboard (player 1): arrows move, Z = A (jump), X = B (grab/throw), C = X (special), V = Y, Enter = Start, Esc = Back, Q/W = triggers, E/R = White/Black, I J K L = right stick (the defaults; the launcher's Controls page changes them). Windows controllers work too, and players 2-4 use them.
 
