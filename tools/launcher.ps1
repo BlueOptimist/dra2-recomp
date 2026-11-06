@@ -28,6 +28,7 @@ $settings = [ordered]@{
     aspect = '4:3'                                # the picture's shape (DRA2_ASPECT): 4:3, 16:10, 16:9 or 21:9
     resolution = '1080'                           # lines drawn (DRA2_RESOLUTION): 480 (original), 720, 1080, 1440, 2160
     msaa = '4'                                    # anti-aliasing samples (DRA2_MSAA): 0 (original), 2, 4, 8
+    windowWidth = 1120                            # the launcher's width; its height follows (8:5)
     vsync = $true                                 # wait for the display's refresh to show each frame (DRA2_VSYNC)
     keys = ''                                     # keyboard bindings (DRA2_KEYS): control=vk[+vk],... in hex; '' = defaults
     pad = ''                                      # controller bindings (DRA2_PAD): control=button,...; '' = defaults
@@ -53,7 +54,7 @@ function Save-Settings { $settings | ConvertTo-Json | Set-Content $settingsFile 
 [xml]$xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Digimon Rumble Arena 2 - Launcher" Width="1120" Height="700" WindowStyle="None" ResizeMode="CanMinimize"
+        Title="Digimon Rumble Arena 2 - Launcher" Width="1120" Height="700" MinWidth="840" MinHeight="525" WindowStyle="None" ResizeMode="CanResize"
         WindowStartupLocation="CenterScreen" Background="#050A1C" FontFamily="Segoe UI" Foreground="#DDE8FF"
         SnapsToDevicePixels="True" UseLayoutRounding="True">
   <Window.Resources>
@@ -240,8 +241,14 @@ function Save-Settings { $settings | ConvertTo-Json | Set-Content $settingsFile 
       <Setter Property="BorderThickness" Value="1"/><Setter Property="CornerRadius" Value="10"/><Setter Property="Padding" Value="18,14"/>
     </Style>
   </Window.Resources>
+  <!-- the frameless window's edges and corners resize it -->
+  <WindowChrome.WindowChrome>
+    <WindowChrome CaptionHeight="0" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0" UseAeroCaptionButtons="False"/>
+  </WindowChrome.WindowChrome>
 
-  <Grid>
+  <!-- laid out at 1120x700 and scaled as a whole to the window's size -->
+  <Viewbox Stretch="Uniform">
+  <Grid Width="1120" Height="700">
     <!-- ======================================================================= the animated background === -->
     <Canvas x:Name="bg" IsHitTestVisible="False" ClipToBounds="True">
       <Canvas.Background>
@@ -445,6 +452,7 @@ function Save-Settings { $settings | ConvertTo-Json | Set-Content $settingsFile 
       </Border>
     </Grid>
   </Grid>
+  </Viewbox>
 </Window>
 '@
 $window = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $xaml))
@@ -877,6 +885,32 @@ $timer.Start()
 $ui.titleBar.Add_MouseLeftButtonDown({ $window.DragMove() })
 $ui.closeBtn.Add_Click({ $window.Close() })
 $ui.minBtn.Add_Click({ $window.WindowState = 'Minimized' })
+# The size: remembered, and kept to the design's 8:5 while dragging, so the scaled page leaves no bars. If the helper
+# can't be built, the window still resizes, with the window's dark background at the sides.
+$work = [Windows.SystemParameters]::WorkArea
+$width = [math]::Max(840, [math]::Min([double]$settings.windowWidth, [math]::Min($work.Width, $work.Height * 1.6)))
+$window.Width = $width; $window.Height = $width / 1.6
+try {
+    Add-Type -ReferencedAssemblies WindowsBase, PresentationCore -TypeDefinition @'
+using System; using System.Runtime.InteropServices; using System.Windows.Interop;
+namespace DRA2 { public static class Aspect {
+    static IntPtr Hook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled) {
+        if (msg != 0x214) return IntPtr.Zero;  // WM_SIZING; wParam: 1 left, 2 right, 3 top, 4-5 top corners, 6 bottom, 7-8 bottom corners
+        int left = Marshal.ReadInt32(lParam, 0), top = Marshal.ReadInt32(lParam, 4);    // the RECT's fields
+        int right = Marshal.ReadInt32(lParam, 8), bottom = Marshal.ReadInt32(lParam, 12);
+        int edge = wParam.ToInt32(), w = right - left, h = bottom - top;
+        if (edge == 3 || edge == 6) Marshal.WriteInt32(lParam, 8, left + h * 8 / 5);
+        else if (edge == 4 || edge == 5) Marshal.WriteInt32(lParam, 4, bottom - w * 5 / 8);
+        else Marshal.WriteInt32(lParam, 12, top + w * 5 / 8);
+        handled = true;
+        return (IntPtr)1;
+    }
+    public static void Attach(IntPtr hwnd) { HwndSource.FromHwnd(hwnd).AddHook(Hook); }
+} }
+'@
+    $window.Add_SourceInitialized({ [DRA2.Aspect]::Attach((New-Object Windows.Interop.WindowInteropHelper $window).Handle) })
+} catch { }
+$window.Add_Closing({ if ($window.WindowState -eq 'Normal') { $settings.windowWidth = [int]$window.ActualWidth; Save-Settings } })
 $window.Add_KeyDown({ param($s, $e) if ($e.Key -eq 'Return' -and -not $script:game -and $e.OriginalSource -isnot [Windows.Controls.TextBox]) { Start-Game } })
 Update-Overview
 $window.ShowDialog() | Out-Null
